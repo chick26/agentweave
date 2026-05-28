@@ -10,12 +10,13 @@ from typing import Any
 
 import streamlit as st
 
-from agent_runtime.common import utc_now_iso
+from agent_runtime.common import load_env_file, utc_now_iso
 from agent_runtime.diagnostic_store import DiagnosticStore
 from agent_runtime.result_events import extract_result_metadata
 
 
 ROOT = Path(__file__).resolve().parent
+load_env_file(ROOT / ".env")
 SESSION_DB_PATH = ROOT / ".streamlit_agent_sessions.sqlite"
 TEXT2SQL_AGENT_ROOT = ROOT / "subagents" / "text2sql"
 
