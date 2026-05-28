@@ -14,6 +14,8 @@ data/*
 !data/.gitkeep
 !data/README.md
 
+docs/iterations/
+
 .streamlit_agent_sessions.sqlite
 .streamlit_agent_sessions.sqlite-shm
 .streamlit_agent_sessions.sqlite-wal

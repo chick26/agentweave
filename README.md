@@ -69,8 +69,7 @@ agentweave/
 ├── skills/
 │   └── data_analysis/             # Loadable data analysis method card
 ├── docs/
-│   ├── architecture/              # Current architecture docs
-│   └── iterations/                # Design reviews and migration notes
+│   └── architecture/              # Current architecture docs
 ├── data/                          # Local private data directory, ignored by git
 ├── tests/                         # Regression tests
 └── .env.example                   # OpenAI-compatible runtime configuration template
@@ -79,8 +78,6 @@ agentweave/
 ## Documentation
 
 - [Architecture docs](docs/architecture/)
-- [Iteration and migration notes](docs/iterations/)
-- [Upgrade note: from tool-only Text2SQL to Subagent + Memory](docs/iterations/02-main-to-subagent-memory-upgrade.md)
 
 ## Configuration
 

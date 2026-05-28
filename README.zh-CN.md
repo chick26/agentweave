@@ -110,10 +110,7 @@ sequenceDiagram
 
 ## 详细文档
 
-`docs/` 按用途拆分为两类：
-
-- `docs/architecture/`：当前架构说明，包括 Orchestrator、Memory、Tools、Skill、Text2SQL Subagent 和 Todo。
-- `docs/iterations/`：迭代与审查记录，包括从纯工具式 Text2SQL 演进到 Subagent + Memory 架构的对比说明。
+`docs/architecture/` 存放当前架构说明，包括 Orchestrator、Memory、Tools、Skill、Text2SQL Subagent 和 Todo。
 
 ## 项目结构
 
@@ -152,8 +149,7 @@ text2sql/
 │   └── data_analysis/
 │       └── SKILL.md               # loadable data-analysis method card
 ├── docs/
-│   ├── architecture/              # 当前架构说明
-│   └── iterations/                # 迭代与审查记录
+│   └── architecture/              # 当前架构说明
 └── data/
     └── README.md                  # 本地私有数据目录，真实数据不提交
 ```
