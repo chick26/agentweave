@@ -83,11 +83,11 @@ def build_todo_context(self, session_id: str) -> str:
 ```text
 [todo_working_memory]
 - [completed] 解析用户提到的时间范围
-- [in_progress] 查询 IDC 机房可用机柜
-- [pending] 查询各机房利用率
+- [in_progress] 查询当前业务指标
+- [pending] 对结果做分组对比
 - [pending] 汇总分析结论
 ```
-看到这张便签，它就会明确：“哦，我现在应该集中火力去查可用机柜了”。
+看到这张便签，它就会明确：“哦，我现在应该集中火力处理当前业务指标了”。
 
 ## Todo 与 持久 Memory 的边界
 

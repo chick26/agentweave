@@ -87,7 +87,7 @@ def build_worker_agent_tool(self, manifest, profile):
     
     # 3. 拦截原生的执行逻辑，替换成完全隔离的 run_subagent 流程
     async def invoke_tool(ctx, input_json):
-        # input_json 就是 {"task": "帮我查一下可用机柜"}
+        # input_json 就是 {"task": "查询某类业务指标"}
         result = await self.run_subagent(
             subagent_name=manifest.name,
             task=input_json["task"],

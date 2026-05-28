@@ -17,5 +17,5 @@
 
 `iterations/` 记录设计演进、审查结论和重要架构对比：
 
-- [403 机房查询调用链审查](iterations/01-403-cabinet-call-chain-review.md)
+- [Text2SQL 调用链审查](iterations/01-text2sql-call-chain-review.md)
 - [从纯工具式 Text2SQL 到 Subagent + Memory 架构](iterations/02-main-to-subagent-memory-upgrade.md)
