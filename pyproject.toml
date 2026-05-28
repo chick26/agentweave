@@ -1,0 +1,12 @@
+[project]
+name = "text2sql-agent"
+version = "0.2.0"
+description = "Subagent-driven data query agent with loadable skills."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=2.18.0",
+    "openai-agents>=0.6.0",
+    "pyyaml>=6.0",
+    "streamlit>=1.42.0",
+]
