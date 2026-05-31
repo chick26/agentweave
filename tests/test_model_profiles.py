@@ -1,5 +1,5 @@
-from agent_runtime.model_profiles import load_model_profiles
-from agent_runtime.embeddings import load_embedding_profile
+from agent_runtime.core.model_profiles import load_model_profiles
+from agent_runtime.memory.embeddings import load_embedding_profile
 
 
 def test_model_profiles_use_env_overrides(monkeypatch):

@@ -21,8 +21,8 @@ sequenceDiagram
     Worker->>DB: Domain/Schema 装载 + value linking
     Worker->>Worker: SQLPlan facts + SQL 模型生成只读 SQL
     Worker->>DB: execute_sql (只读执行)
-    DB-->>Worker: 百万行级结果
-    Worker->>ResultStore: 写入完整结果持久化
+    DB-->>Worker: 查询结果
+    Worker->>ResultStore: 写入上限内结果持久化
     Worker-->>SubagentRunner: SubagentResult (带有少量预览行和 result_id)
     SubagentRunner-->>Orchestrator: 返回短答案和 ID
 ```
@@ -129,13 +129,15 @@ validate_readonly_sql(sql)
 # 2. 从数据库拿数据
 df = backend.execute_sql(sql)
 
-# 3. 完整结果写进持久化 ResultStore（供前端导出和分页）
+# 3. 上限内结果写进持久化 ResultStore（供前端导出和分页）
 result_id = result_store.save(df)
 
 # 4. 只返回给模型和 Orchestrator 一点点“预览”
 return {
     "result_id": result_id,
     "row_count": len(df),
+    "stored_row_count": len(df),
+    "has_more": False,
     "sample_rows": df.head(10).to_json()  # 给模型瞄一眼验证对错
 }
 ```

@@ -1,4 +1,4 @@
-from agent_runtime.memory_store import MemoryStore
+from agent_runtime.memory.memory_store import MemoryStore
 
 
 def test_memory_store_isolates_namespaces_and_overwrites(tmp_path):

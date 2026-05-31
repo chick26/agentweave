@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.embeddings import EmbeddingProfile
-from agent_runtime.memory_manager import MemoryManager, TodoItem
-from agent_runtime.memory_store import MemoryStore
-from agent_runtime.skill_registry import AgentRegistry
+from agent_runtime.memory.embeddings import EmbeddingProfile
+from agent_runtime.memory.memory_manager import MemoryManager, TodoItem
+from agent_runtime.memory.memory_store import MemoryStore
+from agent_runtime.registry.skill_registry import AgentRegistry
 
 
 class FakeEmbeddingClient:

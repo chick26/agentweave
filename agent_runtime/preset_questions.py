@@ -7,7 +7,7 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from agent_runtime.skill_registry import AgentRegistry
+from agent_runtime.registry.skill_registry import AgentRegistry
 from subagents.text2sql.domain_registry import Text2SQLDomainRegistry
 
 

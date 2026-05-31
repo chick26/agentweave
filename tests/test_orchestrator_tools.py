@@ -4,12 +4,12 @@ from pathlib import Path
 
 from agents.tool_context import ToolContext
 
-from agent_runtime.context import OrchestratorContext, RunContext
-from agent_runtime.database import CsvSQLiteBackend
-from agent_runtime.memory_manager import TodoItem
-from agent_runtime.orchestrator import AgentRuntime
-from agent_runtime.prompts import SYSTEM_PROMPT
-from agent_runtime.settings import load_database_backend
+from agent_runtime.core.context import OrchestratorContext, RunContext
+from agent_runtime.storage.database import CsvSQLiteBackend
+from agent_runtime.memory.memory_manager import TodoItem
+from agent_runtime.core.orchestrator import AgentRuntime
+from agent_runtime.core.prompts import SYSTEM_PROMPT
+from agent_runtime.core.settings import load_database_backend
 
 
 def test_orchestrator_exposes_only_runtime_tools():
@@ -163,8 +163,18 @@ def test_skill_agent_tool_invocation_creates_isolated_worker_contexts(tmp_path, 
         )
     )
 
-    assert first_output == "ok"
-    assert second_output == "ok"
+    assert json.loads(first_output) == {
+        "answer": "ok",
+        "error": "",
+        "subagent": "text2sql",
+        "domain": "idc_resources",
+        "sql": "SELECT 1",
+        "result_id": "",
+        "row_count": 0,
+        "truncated": False,
+        "sample_rows": [],
+    }
+    assert json.loads(second_output)["answer"] == "ok"
     assert captured["inputs"] == ["first task", "second task"]
     assert all(isinstance(ctx, RunContext) for ctx in captured["contexts"])
     assert captured["contexts"][0] is not captured["contexts"][1]
@@ -205,7 +215,17 @@ def test_load_skill_returns_skill_body(tmp_path):
 
     assert payload["name"] == "data_analysis"
     assert "Data Analysis Skill" in payload["body"]
-    assert orchestrator_context.events[-1]["kind"] == "skill_event"
+    assert any(event["kind"] == "skill_event" for event in orchestrator_context.events)
+    tool_events = [
+        event for event in orchestrator_context.events
+        if event["kind"] in {"tool_call_start", "tool_result", "tool_call_end"}
+    ]
+    assert [event["kind"] for event in tool_events] == [
+        "tool_call_start",
+        "tool_result",
+        "tool_call_end",
+    ]
+    assert tool_events[-1]["payload"]["tool_name"] == "load_skill"
 
 
 def test_prompt_no_hardcoded_skills():

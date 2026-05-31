@@ -49,7 +49,7 @@ routing_hints:
 - 聚合结果（COUNT/SUM/AVG）必须包含数值和口径。
 - 如果查询依赖业务口径或模糊值匹配，answer 先给直接结论，再用一句话说明本次使用的口径或匹配值。
 - 基于 execute_sql 返回的 result pointer 与 sample_rows 作答。
-- 如果 execute_sql 返回 truncated=true，说明 sample_rows 只是样例，回答中必须说明完整结果可通过 result_id 查看或导出。
+- 如果 execute_sql 返回 truncated=true，说明 sample_rows 只是样例；如果 has_more=true，说明 result_id 中也只保存了上限内的行数。
 - 列表或排行结果只总结关键行；样例结果保留在 rows 字段，result_id 填写 execute_sql 返回的 result_id。
 - sql 字段填写最终执行的 SQL；domain 字段填写 plan 返回的 domain 名称。
 </answer_policy>

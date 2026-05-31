@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.skill_registry import AgentRegistry
+from agent_runtime.registry.skill_registry import AgentRegistry
 from subagents.text2sql.domain_registry import Text2SQLDomainRegistry
 from subagents.text2sql.planning import (
     build_sql_plan_from_parts,

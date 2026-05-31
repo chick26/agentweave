@@ -1,5 +1,5 @@
 from agent_runtime.result_events import extract_result_metadata
-from agent_runtime.result_store import ResultStore
+from agent_runtime.storage.result_store import ResultStore
 
 
 def test_result_store_create_page_export(tmp_path):
@@ -101,11 +101,14 @@ def test_extract_result_metadata_from_trace():
         {
             "result_id": "res_123",
             "row_count": 1,
+            "stored_row_count": 1,
             "columns": ["value"],
             "sample_rows": [{"value": 1}],
             "sample_size": 1,
             "truncated": False,
             "store_truncated": False,
+            "has_more": False,
+            "row_count_is_exact": True,
             "sql": "SELECT 1",
         }
     ]

@@ -33,7 +33,7 @@ sequenceDiagram
     Worker->>Worker: 内部构建事实型 SQLPlan 并生成只读 SQL
     Worker->>DB: execute_sql() 执行只读 SQL 语句
     DB-->>Worker: 返回原始数据结果
-    Worker->>Store: 将完整结果写入本地 SQLite (agent_results.sqlite)
+    Worker->>Store: 将上限内结果写入本地 SQLite (agent_results.sqlite)
     Store-->>Worker: 返回对应的唯一 result_id
     Worker-->>Runner: 返回规范 JSON (含 answer, result_id, sample_rows)
     deactivate Worker
@@ -41,7 +41,7 @@ sequenceDiagram
     deactivate Runner
     AgentTool-->>Orchestrator: 返回 agent-tool 输出
     deactivate AgentTool
-    Orchestrator-->>User: 简洁中文答复结论（在 Results 页签中提供完整结果预览与 CSV 下载）
+    Orchestrator-->>User: 简洁中文答复结论（在 Results 页签中提供已存储结果预览与 CSV 下载）
 ```
 
 ### 2. 核心步骤详解
@@ -65,8 +65,8 @@ sequenceDiagram
    * **异常重试**：如 SQL 执行报错，Worker 会结合报错信息重新生成并执行最多一次。
 
 4. **结果持久化与展现阶段（Result Persistence & UI）**：
-   * 数据库只读执行后，`execute_sql` 将完整的百万级数据写入本地 `agent_results.sqlite` 的 Result Store。
-   * Worker 只携带极简的 `result_id`、总行数 `row_count` 以及前几行的样例数据 `sample_rows` 返回给 Orchestrator，防止主模型上下文溢出。
+   * 数据库只读执行后，`execute_sql` 将上限内的查询结果写入本地 `agent_results.sqlite` 的 Result Store。
+   * Worker 只携带极简的 `result_id`、`stored_row_count`、`has_more` 以及前几行的样例数据 `sample_rows` 返回给 Orchestrator，防止主模型上下文溢出。
    * Orchestrator 提取关键结论，以简洁的中文呈现给用户；前端 Streamlit 接收 `result_id`，在 "Results" 页签下进行分页数据展示及提供 CSV 导出下载。
 
 ## 运行时机制与扩展
@@ -279,13 +279,14 @@ uv run streamlit run app.py
 `execute_sql()` 不再把完整查询结果塞进 worker 上下文，而是写入本地 SQLite `agent_results.sqlite`。Worker 只看到：
 
 - `result_id`
-- `row_count`
+- `row_count` / `stored_row_count`
+- `has_more`
 - `columns`
 - `sample_rows`
 - `sample_size`
 - `truncated`
 
-Streamlit 的 `Results` 页签会根据 `result_id` 从 Result Store 分页读取完整结果，并提供 CSV 下载。
+Streamlit 的 `Results` 页签会根据 `result_id` 从 Result Store 分页读取已存储结果，并提供 CSV 下载。
 
 可调环境变量：
 

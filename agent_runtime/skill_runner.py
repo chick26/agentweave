@@ -19,10 +19,11 @@ from agents.tool import FunctionTool
 from agents.tool_context import ToolContext
 from pydantic import BaseModel, Field, ValidationError
 
-from agent_runtime.context import OrchestratorContext, RunContext
-from agent_runtime.memory_manager import MemoryManager
-from agent_runtime.runtime_utils import build_model, json_dumps, make_async_client, to_jsonable
-from agent_runtime.skill_registry import AgentManifest, AgentRegistry, SkillRegistry
+from agent_runtime.core.context import OrchestratorContext, RunContext
+from agent_runtime.core.events import EventKind
+from agent_runtime.memory.memory_manager import MemoryManager
+from agent_runtime.core.runtime_utils import build_model, json_dumps, make_async_client, to_jsonable
+from agent_runtime.registry.skill_registry import AgentManifest, AgentRegistry, SkillRegistry
 
 # Plan/execute workers normally need two tool calls plus final output.
 # Keep retry headroom while allowing each manifest or env var to override it.
@@ -132,19 +133,21 @@ class SubagentRunner:
         max_turns = self._resolve_max_turns(manifest)
         timeout_seconds = self._resolve_timeout_seconds(manifest)
         run_id = f"{subagent_name}-{uuid.uuid4().hex}"
+        start_payload = {
+            "stage": "worker_start",
+            "skill": subagent_name,
+            "subagent": subagent_name,
+            "model_role": model_role,
+            "model": profile.model_name,
+            "max_turns": max_turns,
+            "timeout_seconds": timeout_seconds,
+            "task": task,
+        }
         orchestrator_context.emit_payload(
-            kind="worker_run",
+            kind=EventKind.SUBAGENT_DISPATCH,
             run_id=run_id,
-            payload={
-                "stage": "worker_start",
-                "skill": subagent_name,
-                "subagent": subagent_name,
-                "model_role": model_role,
-                "model": profile.model_name,
-                "max_turns": max_turns,
-                "timeout_seconds": timeout_seconds,
-                "task": task,
-            },
+            parent_run_id=orchestrator_context.session_id,
+            payload=start_payload,
         )
 
         run_ctx = RunContext(
@@ -174,7 +177,7 @@ class SubagentRunner:
         )
         for payload in memory_events:
             orchestrator_context.emit_payload(
-                kind="memory_event",
+                kind=EventKind.MEMORY_READ,
                 run_id=run_id,
                 payload=payload,
             )
@@ -214,15 +217,17 @@ class SubagentRunner:
             skill_result.skill = skill_result.subagent
         if not skill_result.trace:
             skill_result.trace = [event.get("payload", {}) for event in run_ctx.events]
+        complete_payload = {
+            "stage": "worker_complete",
+            "skill": subagent_name,
+            "subagent": subagent_name,
+            "result": _model_dump(skill_result),
+        }
         orchestrator_context.emit_payload(
-            kind="worker_run",
+            kind=EventKind.SUBAGENT_COMPLETE,
             run_id=run_id,
-            payload={
-                "stage": "worker_complete",
-                "skill": subagent_name,
-                "subagent": subagent_name,
-                "result": _model_dump(skill_result),
-            },
+            parent_run_id=orchestrator_context.session_id,
+            payload=complete_payload,
         )
         return skill_result
 
@@ -314,7 +319,7 @@ class SubagentRunner:
                 task=task_input.task,
                 orchestrator_context=parent_context,
             )
-            return result.answer or json_dumps(_model_dump(result))
+            return json_dumps(_subagent_tool_payload(result))
 
         tool.on_invoke_tool = invoke_tool
         return tool
@@ -379,11 +384,13 @@ class SubagentRunner:
         module = _load_subagent_module(manifest)
         if module is None:
             return []
-        return [
-            getattr(module, name)
-            for name in manifest.tools
-            if hasattr(module, name)
-        ]
+        missing = [name for name in manifest.tools if not hasattr(module, name)]
+        if missing:
+            raise ValueError(
+                f"Subagent `{manifest.name}` declares missing tools in "
+                f"{manifest.execution.tool_module}: {', '.join(missing)}"
+            )
+        return [getattr(module, name) for name in manifest.tools]
 
 
 def _coerce_subagent_result(value: Any, subagent_name: str) -> SubagentResult:
@@ -494,7 +501,23 @@ def _build_subagent_input(options: dict[str, Any]) -> str:
 async def _extract_worker_agent_tool_output(value: Any) -> str:
     final_output = getattr(value, "final_output", value)
     result = _coerce_subagent_result(final_output, "")
-    return result.answer or json_dumps(_model_dump(result))
+    return json_dumps(_subagent_tool_payload(result))
+
+
+def _subagent_tool_payload(result: SubagentResult) -> dict[str, Any]:
+    payload = _model_dump(result)
+    payload["sample_rows"] = payload.pop("rows", [])
+    return {
+        "answer": payload.get("answer", ""),
+        "error": payload.get("error", ""),
+        "subagent": payload.get("subagent") or payload.get("skill", ""),
+        "domain": payload.get("domain", ""),
+        "sql": payload.get("sql", ""),
+        "result_id": payload.get("result_id", ""),
+        "row_count": int(payload.get("row_count") or 0),
+        "truncated": bool(payload.get("truncated")),
+        "sample_rows": payload.get("sample_rows", []),
+    }
 
 
 def _subagent_env_prefix(subagent_name: str) -> str:

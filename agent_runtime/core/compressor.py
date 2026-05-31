@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from agent_runtime.memory_manager import MemoryManager
-from agent_runtime.model_profiles import ModelProfile
-from agent_runtime.prompts import COMPACTION_PROMPT
-from agent_runtime.runtime_utils import make_async_client
-from agent_runtime.token_counter import (
+from agent_runtime.memory.memory_manager import MemoryManager
+from agent_runtime.core.model_profiles import ModelProfile
+from agent_runtime.core.prompts import COMPACTION_PROMPT
+from agent_runtime.core.runtime_utils import make_async_client
+from agent_runtime.memory.token_counter import (
     TokenCounter,
     build_token_counter,
     estimate_tokens as _heuristic_estimate_tokens,

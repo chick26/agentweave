@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -36,13 +37,13 @@ def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
         return {}, text
     parts = text.split("---", 2)
     if len(parts) < 3:
-        return {}, text
+        raise ValueError("Invalid YAML frontmatter: missing closing delimiter")
     try:
         metadata = yaml.safe_load(parts[1].strip()) or {}
-    except yaml.YAMLError:
-        metadata = {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid YAML frontmatter: {exc}") from exc
     if not isinstance(metadata, dict):
-        metadata = {}
+        raise ValueError("Invalid YAML frontmatter: expected a mapping")
     return metadata, parts[2]
 
 
@@ -112,3 +113,19 @@ def file_signature(paths: list[Path]) -> tuple[tuple[str, int, int], ...]:
 
 def json_size(value: Any) -> int:
     return len(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def to_jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if is_dataclass(value):
+        return to_jsonable(asdict(value))
+    if hasattr(value, "model_dump"):
+        return to_jsonable(value.model_dump())
+    if hasattr(value, "dict"):
+        return to_jsonable(value.dict())
+    if isinstance(value, dict):
+        return {str(key): to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [to_jsonable(item) for item in value]
+    return str(value)

@@ -1,8 +1,8 @@
 import sys
 from types import SimpleNamespace
 
-from agent_runtime.compressor import ContextCompressor
-from agent_runtime.token_counter import TokenCountResult, build_token_counter
+from agent_runtime.core.compressor import ContextCompressor
+from agent_runtime.memory.token_counter import TokenCountResult, build_token_counter
 
 
 class FixedCounter:

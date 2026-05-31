@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -14,28 +15,31 @@ from agents import (
     set_tracing_disabled,
 )
 
-from agent_runtime.compressor import ContextCompressor
-from agent_runtime.context import OrchestratorContext
-from agent_runtime.database import CsvSQLiteBackend, DatabaseBackend
-from agent_runtime.embeddings import EmbeddingClient, load_embedding_profile
+from agent_runtime.core.compressor import ContextCompressor
+from agent_runtime.core.context import OrchestratorContext
+from agent_runtime.core.events import EventKind
+from agent_runtime.storage.database import CsvSQLiteBackend, DatabaseBackend
+from agent_runtime.memory.embeddings import EmbeddingClient, load_embedding_profile
 from agent_runtime.hooks import HookResult, HookRunner, SessionStartContext
-from agent_runtime.memory_manager import MemoryManager, TodoItem
-from agent_runtime.memory_store import MemoryStore
-from agent_runtime.prompts import (
+from agent_runtime.memory.memory_manager import MemoryManager, TodoItem
+from agent_runtime.memory.memory_store import MemoryStore
+from agent_runtime.core.prompts import (
     MEMORY_POLICY_SECTION,
     MEMORY_ROLE_POLICY,
     MEMORY_TOOL_POLICY,
     SYSTEM_PROMPT,
 )
-from agent_runtime.result_store import ResultStore
-from agent_runtime.runtime_utils import (
+from agent_runtime.storage.result_store import ResultStore
+from agent_runtime.core.runtime_utils import (
     build_model,
     get_current_time_payload,
     json_dumps,
     to_jsonable,
 )
-from agent_runtime.settings import build_model_profiles
-from agent_runtime.skill_registry import AgentRegistry, SkillRegistry
+from agent_runtime.core.settings import build_model_profiles
+from agent_runtime.core.tool_protocol import ToolOutput
+from agent_runtime.registry.resources import ResourceLoader
+from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
 from agent_runtime.skill_runner import SubagentRunner
 from pydantic import BaseModel
 
@@ -45,6 +49,26 @@ from agent_runtime.common import env_bool
 class TodoToolItem(BaseModel):
     content: str
     status: Literal["pending", "in_progress", "completed"]
+
+
+@dataclass(frozen=True)
+class AgentRunResult:
+    final_output: Any
+    events: list[dict[str, Any]] = field(default_factory=list)
+    subagent_trace: list[dict[str, Any]] = field(default_factory=list)
+    model_logs: list[dict[str, Any]] = field(default_factory=list)
+    worker_runs: list[dict[str, Any]] = field(default_factory=list)
+    todo_events: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "final_output": self.final_output,
+            "events": self.events,
+            "subagent_trace": self.subagent_trace,
+            "model_logs": self.model_logs,
+            "worker_runs": self.worker_runs,
+            "todo_events": self.todo_events,
+        }
 
 
 class AgentRuntime:
@@ -92,6 +116,11 @@ class AgentRuntime:
         )
         self.skill_registry = SkillRegistry(skills_root=self.root / "skills")
         self.agent_registry = AgentRegistry(subagents_root=self.root / "subagents")
+        self.resource_loader = ResourceLoader(
+            root=self.root,
+            skill_registry=self.skill_registry,
+            agent_registry=self.agent_registry,
+        )
         self.memory_store = MemoryStore(self.root / "agent_memory.sqlite")
         self.memory_enabled = (
             env_bool("MEMORY_ENABLED", True)
@@ -143,6 +172,11 @@ class AgentRuntime:
             event_callback=event_callback,
             timezone_name=self.timezone_name,
         )
+        context.emit_payload(
+            kind=EventKind.AGENT_START,
+            run_id=session_id,
+            payload={"stage": "agent_start", "user_input": user_input},
+        )
         session = SQLiteSession(session_id, str(self.session_db_path))
         prior_messages = await session.get_items()
         compressed_messages = await self.compressor.compress(
@@ -154,6 +188,15 @@ class AgentRuntime:
         if compressed_messages != prior_messages:
             await session.clear_session()
             await session.add_items(compressed_messages)
+            context.emit_payload(
+                kind=EventKind.CONTEXT_COMPRESSED,
+                run_id=session_id,
+                payload={
+                    "stage": "context_compressed",
+                    "before_count": len(prior_messages),
+                    "after_count": len(compressed_messages),
+                },
+            )
 
         profile = self.model_profiles["orchestrator"]
         agent = Agent[OrchestratorContext](
@@ -173,31 +216,52 @@ class AgentRuntime:
             tools=self._build_tools(),
         )
 
-        result = await Runner.run(
-            agent,
-            user_input,
-            context=context,
-            session=session,
-            max_turns=max_turns,
-        )
+        try:
+            result = await Runner.run(
+                agent,
+                user_input,
+                context=context,
+                session=session,
+                max_turns=max_turns,
+            )
+        except Exception as exc:
+            context.emit_payload(
+                kind=EventKind.ERROR,
+                run_id=session_id,
+                payload={"stage": "agent_error", "error_type": type(exc).__name__},
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            context.emit_payload(
+                kind=EventKind.AGENT_END,
+                run_id=session_id,
+                payload={"stage": "agent_end", "status": "failed"},
+            )
+            raise
         model_logs = list(local_model_logs)
         model_logs.extend(
             event["payload"]
             for event in context.events
             if event.get("kind") == "model_call" and isinstance(event.get("payload"), dict)
         )
-        return {
-            "final_output": result.final_output,
-            "events": list(context.events),
-            "subagent_trace": _subagent_trace(context.events),
-            "model_logs": model_logs,
-            "worker_runs": [
-                event for event in context.events if event.get("kind") == "worker_run"
+        context.emit_payload(
+            kind=EventKind.AGENT_END,
+            run_id=session_id,
+            payload={"stage": "agent_end", "status": "completed"},
+        )
+        return AgentRunResult(
+            final_output=result.final_output,
+            events=list(context.events),
+            subagent_trace=_subagent_trace(context.events),
+            model_logs=model_logs,
+            worker_runs=[
+                event
+                for event in context.events
+                if event.get("kind") in {"subagent_dispatch", "subagent_complete", "worker_run"}
             ],
-            "todo_events": [
+            todo_events=[
                 event for event in context.events if event.get("kind") == "todo_event"
             ],
-        }
+        ).to_dict()
 
     def _build_instructions(
         self,
@@ -215,9 +279,7 @@ class AgentRuntime:
             )
         ]
         user_memory = _read_optional_path(Path(os.getenv("AGENT_USER_MEMORY_PATH", "~/.agent/USER.md")).expanduser())
-        project_rules = _read_optional_path(
-            Path(os.getenv("AGENT_PROJECT_RULES_PATH", str(self.root / "PROJECT.md"))).expanduser()
-        )
+        project_rules, _project_rules_source = self.resource_loader.get_project_rules()
         retrieval_events: list[dict[str, Any]] = []
         memory_context = ""
         if session_id:
@@ -229,7 +291,7 @@ class AgentRuntime:
         if context is not None:
             for payload in retrieval_events:
                 context.emit_payload(
-                    kind="memory_event",
+                    kind=EventKind.MEMORY_READ,
                     run_id=context.session_id,
                     payload=payload,
                 )
@@ -242,12 +304,7 @@ class AgentRuntime:
         return "\n\n".join(parts)
 
     def _build_skills_section(self) -> str:
-        return "\n\n".join(
-            [
-                self.agent_registry.format_routing_for_prompt(),
-                self.skill_registry.format_catalog_for_prompt(),
-            ]
-        )
+        return self.resource_loader.format_for_prompt()
 
     def _build_subagent_agent_tools(self) -> list[Any]:
         tools = []
@@ -271,6 +328,9 @@ class AgentRuntime:
 
     def clear_memory(self) -> None:
         self.memory_manager.clear()
+
+    def reload_resources(self) -> dict[str, Any]:
+        return self.resource_loader.reload()
 
     def run_session_start_hook(
         self,
@@ -297,8 +357,61 @@ class AgentRuntime:
     def _build_tools(self) -> list[Any]:
         runtime = self
 
+        def emit_tool_start(
+            context: OrchestratorContext,
+            *,
+            tool_name: str,
+            input_payload: dict[str, Any],
+        ) -> None:
+            context.emit_payload(
+                kind=EventKind.TOOL_CALL_START,
+                run_id=context.session_id,
+                payload={
+                    "stage": "tool_call_start",
+                    "tool_name": tool_name,
+                    "input": input_payload,
+                },
+            )
+
+        def emit_tool_finish(
+            context: OrchestratorContext,
+            *,
+            tool_name: str,
+            output: ToolOutput,
+            status: str = "completed",
+        ) -> None:
+            error = str(output.metadata.get("error") or "")
+            payload = {
+                "stage": "tool_result",
+                "tool_name": tool_name,
+                "status": status,
+                "ui_content": output.ui_content,
+                "metadata": output.metadata,
+                "error": error,
+            }
+            context.emit_payload(
+                kind=EventKind.TOOL_RESULT,
+                run_id=context.session_id,
+                payload=payload,
+                error=error,
+            )
+            context.emit_payload(
+                kind=EventKind.TOOL_CALL_END,
+                run_id=context.session_id,
+                payload={
+                    "stage": "tool_call_end",
+                    "tool_name": tool_name,
+                    "status": status,
+                    "error": error,
+                },
+                error=error,
+            )
+
         @function_tool
-        async def get_current_time(timezone_name: str = "") -> str:
+        async def get_current_time(
+            ctx: RunContextWrapper[OrchestratorContext],
+            timezone_name: str = "",
+        ) -> str:
             """Resolve the current date and time before handling relative-time questions.
 
             Use this when the user says today, yesterday, this week, this month,
@@ -309,12 +422,31 @@ class AgentRuntime:
             Args:
                 timezone_name: Optional IANA timezone name. Empty means application default.
             """
+            emit_tool_start(
+                ctx.context,
+                tool_name="get_current_time",
+                input_payload={"timezone_name": timezone_name},
+            )
             requested_timezone = timezone_name.strip() or runtime.timezone_name
             try:
                 output = get_current_time_payload(requested_timezone)
             except ValueError as exc:
                 output = {"timezone": requested_timezone, "error": str(exc)}
-            return json_dumps(output)
+            tool_output = ToolOutput(
+                llm_content=output,
+                ui_content=output,
+                metadata={
+                    "tool_name": "get_current_time",
+                    "error": output.get("error", "") if isinstance(output, dict) else "",
+                },
+            )
+            emit_tool_finish(
+                ctx.context,
+                tool_name="get_current_time",
+                output=tool_output,
+                status="failed" if tool_output.metadata.get("error") else "completed",
+            )
+            return tool_output.to_llm_json()
 
         @function_tool
         async def memory_search(
@@ -334,23 +466,49 @@ class AgentRuntime:
                 namespaces: Optional comma-separated namespaces such as user, project, skill:text2sql.
                 limit: Maximum number of memory records to return.
             """
+            emit_tool_start(
+                ctx.context,
+                tool_name="memory_search",
+                input_payload={
+                    "query": query,
+                    "namespaces": namespaces,
+                    "limit": limit,
+                },
+            )
             namespace_list = [item.strip() for item in namespaces.split(",") if item.strip()]
             result = runtime.memory_manager.retrieve(query, namespace_list, limit=limit)
             records = result.records
+            memory_payload = {
+                "stage": "memory_search",
+                "query": query,
+                "namespaces": namespace_list,
+                "count": len(records),
+                "strategy": result.strategy,
+                "embedding_fallback": result.fallback,
+                "error": result.error,
+            }
             ctx.context.emit_payload(
-                kind="memory_event",
+                kind=EventKind.MEMORY_READ,
                 run_id=ctx.context.session_id,
-                payload={
-                    "stage": "memory_search",
-                    "query": query,
-                    "namespaces": namespace_list,
+                payload=memory_payload,
+            )
+            output = [record.__dict__ for record in records]
+            tool_output = ToolOutput(
+                llm_content=output,
+                ui_content={**memory_payload, "records": output},
+                metadata={
+                    "tool_name": "memory_search",
                     "count": len(records),
-                    "strategy": result.strategy,
-                    "embedding_fallback": result.fallback,
                     "error": result.error,
                 },
             )
-            return json_dumps([record.__dict__ for record in records])
+            emit_tool_finish(
+                ctx.context,
+                tool_name="memory_search",
+                output=tool_output,
+                status="failed" if result.error else "completed",
+            )
+            return tool_output.to_llm_json()
 
         @function_tool
         async def memory_write(
@@ -373,6 +531,11 @@ class AgentRuntime:
                 content: Memory content as a short factual sentence or rule.
                 tags: Optional comma-separated tags.
             """
+            emit_tool_start(
+                ctx.context,
+                tool_name="memory_write",
+                input_payload={"namespace": namespace, "key": key, "tags": tags},
+            )
             tag_list = [item.strip() for item in tags.split(",") if item.strip()]
             runtime.memory_manager.write(
                 namespace=namespace,
@@ -382,7 +545,7 @@ class AgentRuntime:
                 source="agent",
             )
             ctx.context.emit_payload(
-                kind="memory_event",
+                kind=EventKind.MEMORY_WRITE,
                 run_id=ctx.context.session_id,
                 payload={
                     "stage": "memory_write",
@@ -391,7 +554,18 @@ class AgentRuntime:
                     "tags": tag_list,
                 },
             )
-            return json_dumps({"ok": True, "namespace": namespace, "key": key})
+            output = {"ok": True, "namespace": namespace, "key": key}
+            tool_output = ToolOutput(
+                llm_content=output,
+                ui_content={**output, "tags": tag_list},
+                metadata={"tool_name": "memory_write", "error": ""},
+            )
+            emit_tool_finish(
+                ctx.context,
+                tool_name="memory_write",
+                output=tool_output,
+            )
+            return tool_output.to_llm_json()
 
         @function_tool
         async def load_skill(
@@ -408,6 +582,11 @@ class AgentRuntime:
             Args:
                 skill_name: Skill name from skills_catalog, for example data_analysis.
             """
+            emit_tool_start(
+                ctx.context,
+                tool_name="load_skill",
+                input_payload={"skill_name": skill_name},
+            )
             try:
                 skill = runtime.skill_registry.get(skill_name)
                 payload = {
@@ -432,7 +611,22 @@ class AgentRuntime:
                     "found": "error" not in payload,
                 },
             )
-            return json_dumps(payload)
+            tool_output = ToolOutput(
+                llm_content=payload,
+                ui_content=payload,
+                metadata={
+                    "tool_name": "load_skill",
+                    "skill": skill_name,
+                    "error": payload.get("error", ""),
+                },
+            )
+            emit_tool_finish(
+                ctx.context,
+                tool_name="load_skill",
+                output=tool_output,
+                status="failed" if payload.get("error") else "completed",
+            )
+            return tool_output.to_llm_json()
 
         @function_tool
         async def update_todo(
@@ -448,6 +642,11 @@ class AgentRuntime:
             Args:
                 items: Todo items with content and status: pending, in_progress, or completed.
             """
+            emit_tool_start(
+                ctx.context,
+                tool_name="update_todo",
+                input_payload={"items": [item.model_dump() for item in items]},
+            )
             todos = [
                 TodoItem(content=item.content, status=item.status)
                 for item in items
@@ -468,7 +667,21 @@ class AgentRuntime:
                 run_id=ctx.context.session_id,
                 payload=payload,
             )
-            return json_dumps(payload)
+            tool_output = ToolOutput(
+                llm_content=payload,
+                ui_content=payload,
+                metadata={
+                    "tool_name": "update_todo",
+                    "error": payload.get("error", ""),
+                },
+            )
+            emit_tool_finish(
+                ctx.context,
+                tool_name="update_todo",
+                output=tool_output,
+                status="failed" if payload.get("error") else "completed",
+            )
+            return tool_output.to_llm_json()
 
         tools = [
             get_current_time,

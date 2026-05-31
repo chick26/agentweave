@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from agent_runtime.runtime_utils import to_jsonable
+from agent_runtime.common import to_jsonable
 
 
 class DiagnosticStore:
@@ -609,7 +609,11 @@ def _summarize_run(
         "total_completion_tokens": run.get("total_completion_tokens"),
         "total_tokens": run.get("total_tokens"),
         "event_count": len(events),
-        "worker_run_count": sum(1 for event in events if event.get("kind") == "worker_run"),
+        "worker_run_count": sum(
+            1
+            for event in events
+            if event.get("kind") in {"subagent_dispatch", "worker_run"}
+        ),
         "execute_count": execute_count,
         "result_ids": result_ids,
         "diagnostic_issue_count": sum(

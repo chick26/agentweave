@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.skill_registry import AgentRegistry, SkillRegistry
+from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
 from subagents.text2sql.domain_registry import Text2SQLDomainRegistry
 
 
@@ -103,6 +103,38 @@ def test_agent_registry_cache_refreshes_when_manifest_changes(tmp_path):
     assert second.description == "First"
     assert refreshed.description == "Second"
     assert after_invalidate.description == "Second"
+
+
+def test_worker_subagent_requires_model_role(tmp_path):
+    subagents_root = tmp_path / "subagents"
+    agent_dir = subagents_root / "demo"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "AGENT.md").write_text(
+        "---\n"
+        "name: demo\n"
+        "description: Missing role\n"
+        "execution:\n"
+        "  mode: worker\n"
+        "---\n"
+        "Body\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="missing execution.model_role"):
+        AgentRegistry(subagents_root=subagents_root).discover()
+
+
+def test_registry_rejects_invalid_frontmatter(tmp_path):
+    skills_root = tmp_path / "skills"
+    skill_dir = skills_root / "broken"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: [broken\n---\nBody\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Invalid YAML frontmatter"):
+        SkillRegistry(skills_root=skills_root).discover()
 
 
 def test_text2sql_domain_registry_cache_refreshes_when_domain_changes(tmp_path):

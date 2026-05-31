@@ -1,19 +1,22 @@
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
 
-from agent_runtime.context import OrchestratorContext, RunContext
-from agent_runtime.database import CsvSQLiteBackend
-from agent_runtime.memory_manager import MemoryManager
-from agent_runtime.memory_store import MemoryStore
-from agent_runtime.model_profiles import ModelProfile
-from agent_runtime.runtime_utils import LoggingOpenAIChatCompletionsModel
-from agent_runtime.skill_registry import AgentRegistry
+from agent_runtime.core.context import OrchestratorContext, RunContext
+from agent_runtime.storage.database import CsvSQLiteBackend
+from agent_runtime.memory.memory_manager import MemoryManager
+from agent_runtime.memory.memory_store import MemoryStore
+from agent_runtime.core.model_profiles import ModelProfile
+from agent_runtime.core.runtime_utils import LoggingOpenAIChatCompletionsModel
+from agent_runtime.registry.skill_registry import AgentRegistry
 from agent_runtime.skill_runner import (
+    SubagentResult,
     SubagentRunner,
     WORKER_MAX_TURNS,
     _coerce_subagent_result,
+    _subagent_tool_payload,
 )
 
 
@@ -97,7 +100,11 @@ def test_text2sql_worker_uses_sdk_runner_with_isolated_context(tmp_path, monkeyp
         "plan_sql_query",
         "execute_sql",
     }
-    assert [event["payload"]["stage"] for event in context.events if event["kind"] == "worker_run"] == [
+    assert [
+        event["payload"]["stage"]
+        for event in context.events
+        if event["kind"] in {"subagent_dispatch", "subagent_complete"}
+    ] == [
         "worker_start",
         "worker_complete",
     ]
@@ -207,6 +214,42 @@ def test_missing_tool_module_for_declared_tools_raises_clear_error(tmp_path):
     runner = SubagentRunner(registry=registry, root=tmp_path)
 
     with pytest.raises(ValueError, match="execution.tool_module is missing"):
+        runner._build_subagent_tools(registry.get("broken_worker"))
+
+
+def test_declared_missing_tool_raises_clear_error(tmp_path, monkeypatch):
+    tools_module = tmp_path / "partial_tools.py"
+    tools_module.write_text(
+        "from agents import function_tool\n\n"
+        "@function_tool\n"
+        "async def existing_tool(value: str) -> str:\n"
+        "    return value\n",
+        encoding="utf-8",
+    )
+    subagents_root = tmp_path / "subagents"
+    subagent_dir = subagents_root / "broken_worker"
+    subagent_dir.mkdir(parents=True)
+    (subagent_dir / "AGENT.md").write_text(
+        "---\n"
+        "name: broken_worker\n"
+        "description: Broken worker subagent.\n"
+        "execution:\n"
+        "  mode: worker\n"
+        "  model_role: orchestrator\n"
+        "  tool_module: partial_tools\n"
+        "tools:\n"
+        "  - existing_tool\n"
+        "  - missing_tool\n"
+        "---\n"
+        "Broken worker prompt.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    registry = AgentRegistry(subagents_root=subagents_root)
+    runner = SubagentRunner(registry=registry, root=tmp_path)
+
+    with pytest.raises(ValueError, match="declares missing tools"):
         runner._build_subagent_tools(registry.get("broken_worker"))
 
 
@@ -361,3 +404,31 @@ def test_subagent_result_coercion_maps_subagent_field():
 
     assert result.domain == "idc_resources"
     assert result.skill == "text2sql"
+
+
+def test_subagent_tool_payload_keeps_structure_when_answer_is_present():
+    payload = _subagent_tool_payload(
+        SubagentResult(
+            answer="查询完成。",
+            subagent="text2sql",
+            domain="idc_resources",
+            sql="SELECT 1",
+            result_id="res_123",
+            row_count=1,
+            truncated=False,
+            rows=[{"count": 1}],
+            error="",
+        )
+    )
+
+    assert json.loads(json.dumps(payload, ensure_ascii=False)) == {
+        "answer": "查询完成。",
+        "error": "",
+        "subagent": "text2sql",
+        "domain": "idc_resources",
+        "sql": "SELECT 1",
+        "result_id": "res_123",
+        "row_count": 1,
+        "truncated": False,
+        "sample_rows": [{"count": 1}],
+    }

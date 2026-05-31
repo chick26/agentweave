@@ -6,6 +6,7 @@ from agent_runtime.common import (
     utc_now_iso,
     xml_escape,
 )
+import pytest
 
 
 def test_common_helpers_cover_shared_formatting_and_validation():
@@ -30,3 +31,8 @@ def test_quote_identifier_rejects_unsafe_names():
         assert "Unsafe SQL identifier" in str(exc)
     else:
         raise AssertionError("Expected unsafe identifier to fail")
+
+
+def test_split_frontmatter_rejects_invalid_yaml():
+    with pytest.raises(ValueError, match="Invalid YAML frontmatter"):
+        split_frontmatter("---\nname: [broken\n---\nBody")

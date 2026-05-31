@@ -4,8 +4,8 @@ import json
 import os
 from pathlib import Path
 
-from agent_runtime.database import CsvSQLiteBackend, DatabaseBackend, SqlDatabaseBackend
-from agent_runtime.model_profiles import ModelProfile, load_model_profiles
+from agent_runtime.storage.database import CsvSQLiteBackend, DatabaseBackend, SqlDatabaseBackend
+from agent_runtime.core.model_profiles import ModelProfile, load_model_profiles
 
 
 DEFAULT_CSV_TABLES = {

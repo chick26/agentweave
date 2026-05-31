@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from agent_runtime.diagnostic_store import DiagnosticStore
+from agent_runtime.storage.diagnostic_store import DiagnosticStore
 
 
 def test_diagnostic_store_records_run_details(tmp_path) -> None:

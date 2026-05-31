@@ -15,7 +15,7 @@
 
 ## 核心数据结构：AgentRuntime
 
-整个编排器运行时由 `agent_runtime/orchestrator.py` 中的 `AgentRuntime` 类驱动。
+整个编排器运行时由 `agent_runtime/core/orchestrator.py` 中的 `AgentRuntime` 类驱动。
 
 当启动应用时，这个类会将所有子系统连接在一起。当前实现的构造入口仍保持直接参数形态，核心依赖包括：
 
@@ -107,7 +107,7 @@ async def ask(
 模型看到的不是一段静态文本，而是一条动态拼装的输入流水线。`_build_instructions()` 会把各个子系统的信息注入到 `SYSTEM_PROMPT` 模板中。
 
 ```python
-# agent_runtime/prompts.py
+# agent_runtime/core/prompts.py
 SYSTEM_PROMPT = """\
 你是通用 Agent Framework 的主编排器（Orchestrator），负责理解用户意图、选择合适的专用 Subagent 执行任务、汇总结果。
 

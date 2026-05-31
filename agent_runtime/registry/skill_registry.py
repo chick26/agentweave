@@ -251,6 +251,10 @@ def _build_manifest_from_metadata(
     execution = metadata.get("execution") if isinstance(metadata.get("execution"), dict) else {}
     memory = metadata.get("memory") if isinstance(metadata.get("memory"), dict) else {}
     domains = metadata.get("domains") if isinstance(metadata.get("domains"), dict) else {}
+    execution_mode = str(execution.get("mode", "inline"))
+    model_role = str(execution.get("model_role", ""))
+    if kind == "subagent" and execution_mode == "worker" and not model_role:
+        raise ValueError(f"Worker subagent {location} is missing execution.model_role")
     return manifest_cls(
         name=str(metadata.get("name") or default_name),
         description=str(metadata.get("description", "")),
@@ -258,9 +262,9 @@ def _build_manifest_from_metadata(
         kind=kind,
         body=body,
         execution=ManifestExecution(
-            mode=str(execution.get("mode", "inline")),
+            mode=execution_mode,
             worker_profile=str(execution.get("worker_profile", "")),
-            model_role=str(execution.get("model_role", "")),
+            model_role=model_role,
             tool_module=str(execution.get("tool_module", "")),
             context_module=str(execution.get("context_module", "")),
             max_turns=_optional_int(execution.get("max_turns")),
@@ -277,8 +281,10 @@ def _build_manifest_from_metadata(
 def _read_yaml_file(path: Path) -> dict[str, Any]:
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError:
-        data = {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid YAML manifest {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid YAML manifest {path}: expected a mapping")
     return data if isinstance(data, dict) else {}
 
 

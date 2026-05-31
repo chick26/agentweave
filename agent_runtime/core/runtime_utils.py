@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -12,7 +11,7 @@ from agents import AsyncOpenAI, ModelSettings, OpenAIChatCompletionsModel
 from agents.models.chatcmpl_converter import Converter
 from agents.models.openai_chatcompletions import _to_dump_compatible
 
-from agent_runtime.common import utc_now_iso
+from agent_runtime.common import to_jsonable, utc_now_iso
 
 
 class LoggingOpenAIChatCompletionsModel(OpenAIChatCompletionsModel):
@@ -185,22 +184,6 @@ def extract_sql(content: str) -> str:
         return stripped
     sql = match.group(0).strip()
     return _normalize_sql_statement(sql)
-
-
-def to_jsonable(value: Any) -> Any:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if is_dataclass(value):
-        return to_jsonable(asdict(value))
-    if hasattr(value, "model_dump"):
-        return to_jsonable(value.model_dump())
-    if hasattr(value, "dict"):
-        return to_jsonable(value.dict())
-    if isinstance(value, dict):
-        return {str(key): to_jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [to_jsonable(item) for item in value]
-    return str(value)
 
 
 def _build_chat_messages_for_log(

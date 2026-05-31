@@ -1,10 +1,10 @@
 import asyncio
 
-from agent_runtime.compressor import ContextCompressor, emergency_trim, estimate_tokens, micro_compact
-from agent_runtime.memory_manager import MemoryManager
-from agent_runtime.memory_store import MemoryStore
-from agent_runtime.model_profiles import ModelProfile
-from agent_runtime.token_counter import TokenCountResult
+from agent_runtime.core.compressor import ContextCompressor, emergency_trim, estimate_tokens, micro_compact
+from agent_runtime.memory.memory_manager import MemoryManager
+from agent_runtime.memory.memory_store import MemoryStore
+from agent_runtime.core.model_profiles import ModelProfile
+from agent_runtime.memory.token_counter import TokenCountResult
 
 
 class FixedCounter:
@@ -84,7 +84,7 @@ def test_context_compressor_soft_summary(tmp_path, monkeypatch):
         chat = FakeChat()
 
     monkeypatch.setattr(
-        "agent_runtime.compressor.make_async_client",
+        "agent_runtime.core.compressor.make_async_client",
         lambda profile: FakeClient(),
     )
     store = MemoryStore(tmp_path / "agent_memory.sqlite")

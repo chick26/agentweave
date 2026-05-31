@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_runtime.common import file_signature, split_frontmatter, xml_escape
-from agent_runtime.skill_registry import AgentManifest
+from agent_runtime.registry.skill_registry import AgentManifest
 
 
 @dataclass(frozen=True)

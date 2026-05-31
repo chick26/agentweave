@@ -4,9 +4,9 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from agent_runtime.embeddings import EmbeddingClient
-from agent_runtime.memory_store import MemoryRecord, MemoryStore
-from agent_runtime.skill_registry import ManifestBase
+from agent_runtime.memory.embeddings import EmbeddingClient
+from agent_runtime.memory.memory_store import MemoryRecord, MemoryStore
+from agent_runtime.registry.skill_registry import ManifestBase
 
 TodoStatus = Literal["pending", "in_progress", "completed"]
 
