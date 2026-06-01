@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-from agent_runtime.preset_questions import (
+from agent_runtime.core.preset_questions import (
     format_welcome_message,
     generate_preset_question_result,
 )
@@ -28,20 +28,16 @@ class SessionStartContext:
     memory_context: str = ""
 
 
-class HookRunner:
-    def run(self, event_name: str, context: Any) -> HookResult:
-        if event_name != "SessionStart":
-            return HookResult(error=f"Unsupported hook event: {event_name}")
-        try:
-            return self._run_session_start(context)
-        except Exception as exc:
-            return HookResult(
-                message=_fallback_welcome(),
-                payload={"source": "fallback"},
-                error=f"{type(exc).__name__}: {exc}",
-            )
+class HookHandler(Protocol):
+    event_name: str
 
-    def _run_session_start(self, context: SessionStartContext) -> HookResult:
+    def run(self, context: Any) -> HookResult: ...
+
+
+class PresetQuestionsSessionStartHook:
+    event_name = "SessionStart"
+
+    def run(self, context: SessionStartContext) -> HookResult:
         result = generate_preset_question_result(
             skills_root=context.skills_root,
             subagents_root=context.subagents_root,
@@ -63,6 +59,27 @@ class HookRunner:
             },
             error=result.error,
         )
+
+
+class HookRunner:
+    def __init__(self, handlers: list[HookHandler] | None = None) -> None:
+        self.handlers = (
+            list(handlers) if handlers is not None else [PresetQuestionsSessionStartHook()]
+        )
+
+    def run(self, event_name: str, context: Any) -> HookResult:
+        for handler in self.handlers:
+            if handler.event_name != event_name:
+                continue
+            try:
+                return handler.run(context)
+            except Exception as exc:
+                return HookResult(
+                    message=_fallback_welcome(),
+                    payload={"source": "fallback"},
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+        return HookResult(error=f"Unsupported hook event: {event_name}")
 
 
 def _fallback_welcome() -> str:

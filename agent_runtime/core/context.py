@@ -5,12 +5,11 @@ from typing import Any, Callable
 
 from agent_runtime.storage.database import DatabaseBackend
 from agent_runtime.core.model_profiles import ModelProfile
-from agent_runtime.core.events import EventBus, EventKind, RuntimeEvent, make_event
+from agent_runtime.core.events import EventBus, EventKind, RuntimeEvent
 
 
-@dataclass
-class OrchestratorContext:
-    session_id: str
+@dataclass(kw_only=True)
+class BaseContext:
     backend: DatabaseBackend
     model_profiles: dict[str, ModelProfile]
     result_store: Any | None = None
@@ -21,6 +20,11 @@ class OrchestratorContext:
 
     def __post_init__(self) -> None:
         self.event_bus = EventBus(events=self.events, callback=self.event_callback)
+
+
+@dataclass
+class OrchestratorContext(BaseContext):
+    session_id: str
 
     def emit(self, event: RuntimeEvent | dict[str, Any]) -> None:
         self.event_bus.emit_event(event)
@@ -44,24 +48,14 @@ class OrchestratorContext:
 
 
 @dataclass
-class RunContext:
+class RunContext(BaseContext):
     run_id: str
-    backend: DatabaseBackend
-    model_profiles: dict[str, ModelProfile]
-    result_store: Any | None = None
-    events: list[dict[str, Any]] = field(default_factory=list)
-    event_callback: Callable[[dict[str, Any]], None] | None = None
-    timezone_name: str = "Asia/Hong_Kong"
     active_domain: str = ""
     active_table: str = ""
     active_text_fields: list[str] = field(default_factory=list)
     active_field_descriptions: dict[str, str] = field(default_factory=dict)
     agent_registry: Any | None = None
     skill_registry: Any | None = None
-    event_bus: EventBus = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.event_bus = EventBus(events=self.events, callback=self.event_callback)
 
     def emit_payload(
         self,

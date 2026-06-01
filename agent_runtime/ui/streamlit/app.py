@@ -412,6 +412,7 @@ with st.sidebar:
         use_container_width=True,
     ):
         try:
+            template_will_overwrite = get_session_template_store().template_exists(template_name)
             template_id = get_session_template_store().save_template(
                 name=template_name,
                 messages=st.session_state.messages,
@@ -428,7 +429,8 @@ with st.sidebar:
                 },
             }
             _append_local_event_run(label="Save Template", event=event)
-            st.toast(f"模板已保存：{template_name.strip()}")
+            action = "已覆盖" if template_will_overwrite else "已保存"
+            st.toast(f"模板{action}：{template_name.strip()}")
         except ValueError as exc:
             st.warning(str(exc))
         except Exception as exc:

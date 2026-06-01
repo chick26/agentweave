@@ -46,20 +46,71 @@ def build_session_html(
         messages=messages,
         event_runs=event_runs,
     )
-    body = "\n".join(
-        f"<p>{escape(line)}</p>" if line else ""
-        for line in markdown.splitlines()
-    )
+    body = _markdown_to_html(markdown)
     return (
         "<!doctype html>\n"
         "<html><head><meta charset=\"utf-8\"><title>AgentWeave Session</title>"
         "<style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;"
         "max-width:900px;margin:40px auto;line-height:1.5;padding:0 24px}"
         "p{white-space:pre-wrap}code{background:#f4f4f5;padding:2px 4px;border-radius:4px}"
+        "ul{padding-left:24px}li{margin:4px 0}"
         "</style></head><body>"
         f"{body}"
         "</body></html>\n"
     )
+
+
+def _markdown_to_html(markdown: str) -> str:
+    html: list[str] = []
+    in_list = False
+    for raw_line in markdown.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            if in_list:
+                html.append("</ul>")
+                in_list = False
+            continue
+        heading_level = _heading_level(line)
+        if heading_level:
+            if in_list:
+                html.append("</ul>")
+                in_list = False
+            text = line[heading_level + 1 :].strip()
+            html.append(f"<h{heading_level}>{_render_inline_markdown(text)}</h{heading_level}>")
+            continue
+        if line.startswith("- "):
+            if not in_list:
+                html.append("<ul>")
+                in_list = True
+            html.append(f"<li>{_render_inline_markdown(line[2:].strip())}</li>")
+            continue
+        if in_list:
+            html.append("</ul>")
+            in_list = False
+        html.append(f"<p>{_render_inline_markdown(line)}</p>")
+    if in_list:
+        html.append("</ul>")
+    return "\n".join(html)
+
+
+def _heading_level(line: str) -> int:
+    for level in (3, 2, 1):
+        prefix = "#" * level + " "
+        if line.startswith(prefix):
+            return level
+    return 0
+
+
+def _render_inline_markdown(text: str) -> str:
+    parts = text.split("`")
+    rendered: list[str] = []
+    for index, part in enumerate(parts):
+        escaped = escape(part)
+        if index % 2 == 1:
+            rendered.append(f"<code>{escaped}</code>")
+        else:
+            rendered.append(escaped)
+    return "".join(rendered)
 
 
 def _event_summary(event: dict[str, Any]) -> str:

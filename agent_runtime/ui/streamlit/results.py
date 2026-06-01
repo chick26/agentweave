@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 import streamlit as st
 
-from agent_runtime.result_events import extract_result_metadata
+from agent_runtime.core.result_events import extract_result_metadata
 from agent_runtime.ui.streamlit.formatting import format_result_option
 
 

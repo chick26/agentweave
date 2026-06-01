@@ -56,6 +56,18 @@ class SessionTemplateStore:
             )
         return template_id
 
+    def template_exists(self, name: str) -> bool:
+        template_name = name.strip()
+        if not template_name:
+            return False
+        template_id = _template_id(template_name)
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT 1 FROM session_templates WHERE id = ?",
+                (template_id,),
+            ).fetchone()
+        return row is not None
+
     def list_templates(self) -> list[SessionTemplate]:
         with self._lock:
             rows = self._connection.execute(

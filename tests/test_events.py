@@ -36,3 +36,28 @@ def test_runtime_event_and_make_event_keep_wire_shape() -> None:
     assert legacy["kind"] == "subagent_trace"
     assert legacy["payload"]["stage"] == "execute"
 
+
+def test_event_bus_supports_multiple_callbacks_and_unsubscribe() -> None:
+    first_seen = []
+    second_seen = []
+    second_callback = second_seen.append
+    bus = EventBus(callback=first_seen.append, callbacks=[second_callback])
+
+    emitted = bus.emit(kind="agent_start", run_id="run-1", payload={})
+    bus.unsubscribe(first_seen.append)
+    after_unsubscribe = bus.emit(kind="agent_end", run_id="run-1", payload={})
+
+    assert first_seen == [emitted]
+    assert second_seen == [emitted, after_unsubscribe]
+
+
+def test_emit_event_preserves_sequence_without_skipping_next_number() -> None:
+    bus = EventBus(events=[])
+
+    preserved = bus.emit_event(
+        RuntimeEvent(kind="model_call", run_id="run-1", payload={}, sequence=7)
+    )
+    next_event = bus.emit(kind="agent_end", run_id="run-1", payload={})
+
+    assert preserved["sequence"] == 7
+    assert next_event["sequence"] == 8

@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from agent_runtime.hooks import HookRunner, SessionStartContext
-from agent_runtime.preset_questions import PresetQuestionGroup, PresetQuestionResult
+from agent_runtime.core.hooks import HookResult, HookRunner, SessionStartContext
+from agent_runtime.core.preset_questions import PresetQuestionGroup, PresetQuestionResult
 
 
 def test_session_start_hook_generates_welcome(monkeypatch):
@@ -19,7 +19,7 @@ def test_session_start_hook_generates_welcome(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "agent_runtime.hooks.generate_preset_question_result",
+        "agent_runtime.core.hooks.generate_preset_question_result",
         fake_generate_preset_question_result,
     )
 
@@ -47,7 +47,7 @@ def test_session_start_hook_fallback_on_error(monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "agent_runtime.hooks.generate_preset_question_result",
+        "agent_runtime.core.hooks.generate_preset_question_result",
         fake_generate_preset_question_result,
     )
 
@@ -64,3 +64,35 @@ def test_session_start_hook_fallback_on_error(monkeypatch):
     assert "你好，我可以回答已接入数据领域的问数问题。" == result.message
     assert "RuntimeError: boom" == result.error
     assert result.payload["source"] == "fallback"
+
+
+def test_hook_runner_returns_unsupported_event_error() -> None:
+    result = HookRunner().run("UnknownEvent", object())
+
+    assert result.message == ""
+    assert result.error == "Unsupported hook event: UnknownEvent"
+
+
+def test_hook_runner_accepts_injected_handler() -> None:
+    class FakeHook:
+        event_name = "SessionStart"
+
+        def run(self, context):
+            return HookResult(
+                message=f"fake:{context.model_name}",
+                payload={"source": "fake"},
+            )
+
+    result = HookRunner(handlers=[FakeHook()]).run(
+        "SessionStart",
+        SessionStartContext(
+            skills_root=Path("skills"),
+            base_url="http://example.test/v1",
+            model_name="sql",
+            api_key="not-needed",
+        ),
+    )
+
+    assert result.message == "fake:sql"
+    assert result.payload == {"source": "fake"}
+    assert result.error == ""

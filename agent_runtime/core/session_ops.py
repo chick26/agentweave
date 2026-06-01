@@ -14,9 +14,10 @@ async def fork_sqlite_session(
     source = SQLiteSession(source_session_id, str(db_path))
     target = SQLiteSession(target_session_id, str(db_path))
     items = await source.get_items()
+    if not items:
+        raise ValueError(f"Source session has no items: {source_session_id}")
     await target.clear_session()
-    if items:
-        await target.add_items(items)
+    await target.add_items(items)
     return len(items)
 
 

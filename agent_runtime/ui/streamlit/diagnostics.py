@@ -237,21 +237,24 @@ def _render_model_call(call: dict[str, Any], position: int, expanded: bool = Fal
         )
         if call.get("diagnostic_issue"):
             st.warning(f"诊断数据缺失：`{call['diagnostic_issue']}`")
-        request_tab, response_tab, raw_tab = st.tabs(["实际输入", "实际输出", "完整 JSON"])
-        with request_tab:
-            request = call.get("request")
-            if request:
-                st.json(request, expanded=False)
-            else:
-                st.warning("没有保存 request payload。")
-        with response_tab:
-            response = call.get("response")
-            if response:
-                st.json(response, expanded=False)
-            else:
-                st.warning("没有保存 response payload。")
-        with raw_tab:
-            st.json(call, expanded=False)
+        detail_tabs = _model_call_detail_tabs(call)
+        tabs = st.tabs([label for label, _ in detail_tabs])
+        for tab, (_, key) in zip(tabs, detail_tabs):
+            with tab:
+                if key == "raw":
+                    st.json(call, expanded=False)
+                else:
+                    st.json(call[key], expanded=False)
+
+
+def _model_call_detail_tabs(call: dict[str, Any]) -> list[tuple[str, str]]:
+    tabs: list[tuple[str, str]] = []
+    if call.get("request"):
+        tabs.append(("实际输入", "request"))
+    if call.get("response"):
+        tabs.append(("实际输出", "response"))
+    tabs.append(("完整 JSON", "raw"))
+    return tabs
 
 
 def _render_diagnostic_overview(diagnostic_run: dict[str, Any]) -> None:

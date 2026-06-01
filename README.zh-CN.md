@@ -118,23 +118,23 @@ sequenceDiagram
 text2sql/
 ├── app.py                         # Streamlit 入口
 ├── agent_runtime/
-│   ├── orchestrator.py            # 主 Orchestrator runtime
-│   ├── skill_runner.py            # SubagentRunner worker 生命周期
-│   ├── skill_registry.py          # AgentRegistry + SkillRegistry
 │   ├── common.py                  # 通用 helper：时间、XML、frontmatter、identifier 等
-│   ├── result_store.py            # SQLite query result store
-│   ├── diagnostic_store.py        # 诊断日志持久化
-│   ├── memory_manager.py          # memory/todo 上层协调
-│   ├── memory_store.py            # SQLite memory store
-│   ├── embeddings.py              # OpenAI-compatible embedding client
-│   ├── token_counter.py           # 可插拔 token budget 计数器
-│   ├── compressor.py              # 上下文压缩与 hard trim
-│   ├── hooks.py                   # SessionStart hook
-│   ├── model_profiles.py          # 模型角色配置
-│   ├── settings.py                # 环境变量配置读取
-│   ├── database.py                # 只读数据库后端
-│   ├── preset_questions.py        # 首页预设问题生成
-│   └── runtime_utils.py           # 模型日志、SQL 提取、时间工具
+│   ├── core/
+│   │   ├── orchestrator.py        # 主 Orchestrator runtime
+│   │   ├── skill_runner.py        # SubagentRunner worker 生命周期
+│   │   ├── context.py             # BaseContext / OrchestratorContext / RunContext
+│   │   ├── events.py              # RuntimeEvent / EventBus
+│   │   ├── hooks.py               # SessionStart hook runner / handlers
+│   │   ├── preset_questions.py    # 首页预设问题生成
+│   │   ├── result_events.py       # 从事件流提取 ResultStore metadata
+│   │   ├── compressor.py          # 上下文压缩与 hard trim
+│   │   ├── model_profiles.py      # 模型角色配置
+│   │   ├── settings.py            # 环境变量配置读取
+│   │   └── runtime_utils.py       # 模型日志、SQL 提取、时间工具
+│   ├── memory/                    # memory/todo/session summary/embedding
+│   ├── storage/                   # database/result/diagnostic/template store
+│   ├── registry/                  # manifest discovery / resource loader
+│   └── ui/streamlit/              # Streamlit rendering and session actions
 ├── subagents/
 │   └── text2sql/
 │       ├── AGENT.md               # subagent manifest frontmatter + worker prompt body

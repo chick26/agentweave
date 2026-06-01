@@ -1,4 +1,4 @@
-from agent_runtime.result_events import extract_result_metadata
+from agent_runtime.core.result_events import extract_result_metadata
 from agent_runtime.storage.result_store import ResultStore
 
 

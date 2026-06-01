@@ -5,19 +5,19 @@ from pathlib import Path
 import pytest
 
 from agent_runtime.core.context import OrchestratorContext, RunContext
-from agent_runtime.storage.database import CsvSQLiteBackend
-from agent_runtime.memory.memory_manager import MemoryManager
-from agent_runtime.memory.memory_store import MemoryStore
 from agent_runtime.core.model_profiles import ModelProfile
 from agent_runtime.core.runtime_utils import LoggingOpenAIChatCompletionsModel
-from agent_runtime.registry.skill_registry import AgentRegistry
-from agent_runtime.skill_runner import (
+from agent_runtime.core.skill_runner import (
     SubagentResult,
     SubagentRunner,
     WORKER_MAX_TURNS,
     _coerce_subagent_result,
     _subagent_tool_payload,
 )
+from agent_runtime.memory.memory_manager import MemoryManager
+from agent_runtime.memory.memory_store import MemoryStore
+from agent_runtime.registry.skill_registry import AgentRegistry
+from agent_runtime.storage.database import CsvSQLiteBackend
 
 
 def _registry() -> AgentRegistry:
@@ -54,7 +54,7 @@ def test_text2sql_worker_uses_sdk_runner_with_isolated_context(tmp_path, monkeyp
         captured["max_turns"] = kwargs["max_turns"]
         return FakeRunResult()
 
-    monkeypatch.setattr("agent_runtime.skill_runner.Runner.run", fake_runner_run)
+    monkeypatch.setattr("agent_runtime.core.skill_runner.Runner.run", fake_runner_run)
 
     registry = _registry()
     runner = SubagentRunner(registry=registry, root=Path("."))
@@ -294,7 +294,7 @@ def test_worker_reads_only_declared_skill_memory(tmp_path):
     assert "不要注入 worker。" not in prompt
 
 
-def test_subagent_result_coercion_rejects_invalid_trace_shape():
+def test_subagent_result_coercion_normalizes_string_trace_items():
     result = _coerce_subagent_result(
         {
             "answer": "403机房没有可用机柜。",
@@ -312,9 +312,12 @@ def test_subagent_result_coercion_rejects_invalid_trace_shape():
         "text2sql",
     )
 
-    assert result.answer == ""
-    assert result.error.startswith("invalid_subagent_output:")
-    assert result.trace[0]["stage"] == "invalid_subagent_output"
+    assert result.answer == "403机房没有可用机柜。"
+    assert result.error == ""
+    assert result.trace == [
+        {"stage": "note", "message": "activate_domain: idc_resources"},
+        {"stage": "note", "message": "execute_sql: COUNT -> 0"},
+    ]
 
 
 def test_text2sql_worker_timeout_returns_latest_execute_result(tmp_path, monkeypatch):
@@ -348,8 +351,8 @@ def test_text2sql_worker_timeout_returns_latest_execute_result(tmp_path, monkeyp
         )
         await asyncio.sleep(1)
 
-    monkeypatch.setattr("agent_runtime.skill_runner.Runner.run", fake_runner_run)
-    monkeypatch.setattr("agent_runtime.skill_runner.WORKER_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("agent_runtime.core.skill_runner.Runner.run", fake_runner_run)
+    monkeypatch.setattr("agent_runtime.core.skill_runner.WORKER_TIMEOUT_SECONDS", 0.01)
     registry = _registry()
     runner = SubagentRunner(registry=registry, root=Path("."))
     context = OrchestratorContext(

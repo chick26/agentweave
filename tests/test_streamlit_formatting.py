@@ -146,6 +146,25 @@ def test_session_export_includes_messages_and_events() -> None:
     assert "### User" in markdown
     assert "`tool_result` `tool_result` execute_sql" in markdown
     assert "&lt;hello&gt;" in html
+    assert "<h1>AgentWeave Session</h1>" in html
+    assert "<li>Session ID: <code>session-1</code></li>" in html
+
+
+def test_session_html_renders_markdown_structure_and_escapes_content() -> None:
+    html = build_session_html(
+        session_id="session-1",
+        messages=[
+            {"role": "user", "content": "请看 `code` 和 <script>alert(1)</script>"},
+        ],
+        event_runs=[],
+    )
+
+    assert "<h1>AgentWeave Session</h1>" in html
+    assert "<h2>Conversation</h2>" in html
+    assert "<h3>User</h3>" in html
+    assert "<code>code</code>" in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "<script>alert(1)</script>" not in html
 
 
 def test_streamlit_ui_config_dataclasses_are_plain_values() -> None:

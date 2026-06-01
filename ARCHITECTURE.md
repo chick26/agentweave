@@ -6,8 +6,9 @@ output.
 
 ## Package Boundaries
 
-- `agent_runtime.core`: orchestration, run context, prompts, model profiles,
-  context compression, runtime settings, events, and tool protocols.
+- `agent_runtime.core`: orchestration, subagent runner, run context, prompts,
+  model profiles, context compression, runtime settings, events, hook handlers,
+  preset question generation, result event extraction, and tool protocols.
 - `agent_runtime.memory`: durable memory, embeddings, session summaries, todo
   state, and token counting.
 - `agent_runtime.storage`: database backends, diagnostic persistence, and
@@ -28,13 +29,15 @@ Internal code should use the layered paths directly, for example:
 ```python
 from agent_runtime.core.orchestrator import AgentRuntime
 from agent_runtime.core.context import RunContext
+from agent_runtime.core.skill_runner import SubagentRunner
 from agent_runtime.storage.database import CsvSQLiteBackend
 from agent_runtime.memory.memory_manager import MemoryManager
 from agent_runtime.registry.skill_registry import AgentRegistry
 ```
 
-The old top-level shim modules such as `agent_runtime.orchestrator` and
-`agent_runtime.database` are intentionally removed.
+The old top-level shim modules such as `agent_runtime.orchestrator`,
+`agent_runtime.skill_runner`, and `agent_runtime.database` are intentionally
+removed.
 
 ## Runtime Events
 

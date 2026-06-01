@@ -1,5 +1,6 @@
 import asyncio
 from agents import SQLiteSession
+import pytest
 
 from agent_runtime.core.session_ops import (
     fork_sqlite_session,
@@ -27,6 +28,19 @@ def test_fork_sqlite_session_copies_items(tmp_path):
 
     assert copied == 2
     assert asyncio.run(target.get_items()) == asyncio.run(source.get_items())
+
+
+def test_fork_sqlite_session_rejects_empty_source(tmp_path):
+    db_path = tmp_path / "sessions.sqlite"
+
+    with pytest.raises(ValueError, match="Source session has no items"):
+        asyncio.run(
+            fork_sqlite_session(
+                db_path=db_path,
+                source_session_id="missing",
+                target_session_id="target",
+            )
+        )
 
 
 def test_replace_sqlite_session_items_overwrites_existing_items(tmp_path):

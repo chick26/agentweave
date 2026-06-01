@@ -12,3 +12,10 @@
 - [技能系统](architecture/04-skill.md)
 - [Text2SQL 子智能体](architecture/05-text2sql-subagent.md)
 - [Todo 工作记忆](architecture/06-todo.md)
+
+## 对外接口与前端接入
+
+- [HTTP/SSE API 契约](api/http-sse-contract.md)
+- [TS Web 接入指南](frontend/ts-web-integration.md)
+- [TS Web UI 设计建议](frontend/ui-design.md)
+- [最小 TypeScript 示例](frontend/examples/)

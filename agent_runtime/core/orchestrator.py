@@ -20,7 +20,7 @@ from agent_runtime.core.context import OrchestratorContext
 from agent_runtime.core.events import EventKind
 from agent_runtime.storage.database import CsvSQLiteBackend, DatabaseBackend
 from agent_runtime.memory.embeddings import EmbeddingClient, load_embedding_profile
-from agent_runtime.hooks import HookResult, HookRunner, SessionStartContext
+from agent_runtime.core.hooks import HookResult, HookRunner, SessionStartContext
 from agent_runtime.memory.memory_manager import MemoryManager, TodoItem
 from agent_runtime.memory.memory_store import MemoryStore
 from agent_runtime.core.prompts import (
@@ -40,7 +40,7 @@ from agent_runtime.core.settings import build_model_profiles
 from agent_runtime.core.tool_protocol import ToolOutput
 from agent_runtime.registry.resources import ResourceLoader
 from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
-from agent_runtime.skill_runner import SubagentRunner
+from agent_runtime.core.skill_runner import SubagentRunner
 from pydantic import BaseModel
 
 from agent_runtime.common import env_bool

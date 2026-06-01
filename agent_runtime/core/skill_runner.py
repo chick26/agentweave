@@ -327,6 +327,7 @@ class SubagentRunner:
     def _resolve_model_role(self, manifest: AgentManifest) -> str:
         model_role = manifest.execution.model_role
         if manifest.name == "text2sql":
+            # Deprecated compatibility alias. Prefer SUBAGENT_TEXT2SQL_MODEL_ROLE.
             model_role = os.getenv("TEXT2SQL_WORKER_MODEL_ROLE", model_role)
         model_role = os.getenv(f"{_subagent_env_prefix(manifest.name)}_MODEL_ROLE", model_role)
         return model_role
@@ -415,6 +416,7 @@ def _validate_subagent_payload(
     *,
     raw_output: str,
 ) -> SubagentResult:
+    payload = _normalize_subagent_payload(payload)
     try:
         return SubagentResult.model_validate(payload)
     except ValidationError as exc:
@@ -430,6 +432,17 @@ def _validate_subagent_payload(
             ],
             error=f"invalid_subagent_output: {exc.errors()}",
         )
+
+
+def _normalize_subagent_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    trace = payload.get("trace")
+    if not isinstance(trace, list):
+        return payload
+    normalized_trace = [
+        item if isinstance(item, dict) else {"stage": "note", "message": str(item)}
+        for item in trace
+    ]
+    return {**payload, "trace": normalized_trace}
 
 
 def _fallback_result_from_trace(

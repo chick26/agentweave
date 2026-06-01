@@ -70,10 +70,23 @@ class EventBus:
         *,
         events: list[dict[str, Any]] | None = None,
         callback: Callable[[dict[str, Any]], None] | None = None,
+        callbacks: list[Callable[[dict[str, Any]], None]] | None = None,
     ) -> None:
         self.events = events if events is not None else []
+        self.callbacks = list(callbacks or [])
+        if callback is not None and callback not in self.callbacks:
+            self.callbacks.append(callback)
         self.callback = callback
         self._sequence = _max_sequence(self.events)
+
+    def subscribe(self, callback: Callable[[dict[str, Any]], None]) -> None:
+        if callback not in self.callbacks:
+            self.callbacks.append(callback)
+
+    def unsubscribe(self, callback: Callable[[dict[str, Any]], None]) -> None:
+        self.callbacks = [item for item in self.callbacks if item != callback]
+        if self.callback == callback:
+            self.callback = self.callbacks[0] if self.callbacks else None
 
     def emit(
         self,
@@ -94,29 +107,37 @@ class EventBus:
             error=error,
         ).to_dict()
         self.events.append(event)
-        if self.callback is not None:
-            self.callback(event)
+        self._notify(event)
         return event
 
     def emit_event(self, event: RuntimeEvent | dict[str, Any]) -> dict[str, Any]:
         if isinstance(event, RuntimeEvent):
-            self._sequence += 1
+            sequence = event.sequence
+            if sequence:
+                self._sequence = max(self._sequence, int(sequence))
+            else:
+                self._sequence += 1
+                sequence = self._sequence
             event_dict = RuntimeEvent(
                 kind=event.kind,
                 run_id=event.run_id,
                 payload=event.payload,
                 timestamp=event.timestamp,
                 parent_run_id=event.parent_run_id,
-                sequence=event.sequence or self._sequence,
+                sequence=sequence,
                 error=event.error,
             ).to_dict()
         else:
             self._sequence += 1
             event_dict = _normalize_event_dict(event, self._sequence)
+            self._sequence = max(self._sequence, int(event_dict.get("sequence") or 0))
         self.events.append(event_dict)
-        if self.callback is not None:
-            self.callback(event_dict)
+        self._notify(event_dict)
         return event_dict
+
+    def _notify(self, event: dict[str, Any]) -> None:
+        for callback in list(self.callbacks):
+            callback(event)
 
 
 def make_event(

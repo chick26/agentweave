@@ -130,7 +130,7 @@ def test_skill_agent_tool_invocation_creates_isolated_worker_contexts(tmp_path, 
         captured["sessions"].append(kwargs["session"])
         return FakeRunResult()
 
-    monkeypatch.setattr("agent_runtime.skill_runner.Runner.run", fake_runner_run)
+    monkeypatch.setattr("agent_runtime.core.skill_runner.Runner.run", fake_runner_run)
 
     tool = next(tool for tool in runtime._build_tools() if tool.name == "text2sql")
     orchestrator_context = OrchestratorContext(
