@@ -134,6 +134,7 @@ text2sql/
 │   ├── memory/                    # memory/todo/session summary/embedding
 │   ├── storage/                   # database/result/diagnostic/template store
 │   ├── registry/                  # manifest discovery / resource loader
+│   ├── server/                    # HTTP/SSE backend API
 │   └── ui/streamlit/              # Streamlit rendering and session actions
 ├── subagents/
 │   └── text2sql/
@@ -249,6 +250,8 @@ export TEXT2SQL_TABLES_JSON='{
 
 ## 启动
 
+本地 Streamlit 调试台：
+
 ```bash
 uv sync
 uv run streamlit run app.py
@@ -259,6 +262,15 @@ uv run streamlit run app.py
 ```bash
 ./.venv/bin/streamlit run app.py
 ```
+
+FastAPI HTTP/SSE 后端服务：
+
+```bash
+export AGENTWEAVE_SERVER_TOKEN=dev-token
+uv run python -m agent_runtime.server
+```
+
+默认监听 `127.0.0.1:8765`。跨设备访问时设置 `AGENTWEAVE_SERVER_HOST=0.0.0.0`，并保留 Bearer Token 鉴权。
 
 ## 数据后端配置
 

@@ -5,8 +5,10 @@ description = "Subagent-driven data query agent with loadable skills."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "fastapi>=0.136.3",
     "openai>=2.18.0",
     "openai-agents>=0.6.0",
     "pyyaml>=6.0",
     "streamlit>=1.42.0",
+    "uvicorn>=0.46.0",
 ]

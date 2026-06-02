@@ -15,6 +15,8 @@ output.
   result storage.
 - `agent_runtime.registry`: manifest-driven discovery for skills, subagents,
   domains, project rules, and reloadable resource snapshots.
+- `agent_runtime.server`: HTTP/SSE API and application service layer for TUI
+  and external TS Web clients.
 - `agent_runtime.ui.streamlit`: Streamlit rendering only. It consumes runtime
   results and events rather than owning orchestration logic.
 

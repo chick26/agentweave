@@ -39,6 +39,20 @@ export interface ResultCreatedEvent {
   has_more: boolean;
 }
 
+export interface ModelDeltaEvent {
+  type: "model_delta";
+  run_id: string;
+  sequence: number;
+  timestamp: string;
+  payload: {
+    kind: string;
+    stage?: string;
+    title?: string;
+    model?: string;
+    delta: string;
+  };
+}
+
 export interface RunCompleteEvent {
   type: "run_complete";
   run_id: string;
@@ -64,6 +78,7 @@ export interface RunErrorEvent {
 export type AgentWeaveSseEvent =
   | RuntimeEvent
   | ResultCreatedEvent
+  | ModelDeltaEvent
   | RunCompleteEvent
   | RunErrorEvent;
 

@@ -158,6 +158,7 @@ class AgentRuntime:
         user_input: str,
         session_id: str,
         event_callback: Callable[[dict[str, Any]], None] | None = None,
+        model_delta_callback: Callable[[dict[str, Any]], None] | None = None,
         max_turns: int = 10,
     ) -> dict[str, Any]:
         local_model_logs: list[dict[str, Any]] = []
@@ -217,13 +218,33 @@ class AgentRuntime:
         )
 
         try:
-            result = await Runner.run(
-                agent,
-                user_input,
-                context=context,
-                session=session,
-                max_turns=max_turns,
-            )
+            if model_delta_callback is None:
+                result = await Runner.run(
+                    agent,
+                    user_input,
+                    context=context,
+                    session=session,
+                    max_turns=max_turns,
+                )
+            else:
+                result = Runner.run_streamed(
+                    agent,
+                    user_input,
+                    context=context,
+                    session=session,
+                    max_turns=max_turns,
+                )
+                async for stream_event in result.stream_events():
+                    if delta := _model_text_delta(stream_event):
+                        model_delta_callback(
+                            {
+                                "kind": "orchestration_model",
+                                "stage": "model_delta",
+                                "title": "编排模型调用",
+                                "model": profile.model_name,
+                                "delta": delta,
+                            }
+                        )
         except Exception as exc:
             context.emit_payload(
                 kind=EventKind.ERROR,
@@ -702,6 +723,16 @@ def _subagent_trace(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if isinstance(payload, dict):
                 trace.append(payload)
     return trace
+
+
+def _model_text_delta(stream_event: Any) -> str:
+    if getattr(stream_event, "type", "") != "raw_response_event":
+        return ""
+    data = getattr(stream_event, "data", None)
+    if getattr(data, "type", "") != "response.output_text.delta":
+        return ""
+    delta = getattr(data, "delta", "")
+    return delta if isinstance(delta, str) else ""
 
 
 def _read_optional_path(path: Path) -> str:

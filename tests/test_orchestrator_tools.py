@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from agents.tool_context import ToolContext
 
@@ -308,3 +309,90 @@ def test_skills_section_includes_execution_mode():
     assert 'execution_mode="isolated subagent"' in skills_section
     assert "<skills_catalog>" in skills_section
     assert 'name="data_analysis"' in skills_section
+
+
+def test_runtime_ask_without_model_delta_uses_non_streaming_runner(tmp_path, monkeypatch):
+    runtime = AgentRuntime(
+        backend=load_database_backend(Path(".")),
+        base_url="http://example.test/v1",
+        model_name="orchestrator",
+        api_key="not-needed",
+        session_db_path=tmp_path / "sessions.sqlite",
+        sql_base_url="http://example.test/sql/v1",
+        sql_model_name="sql",
+    )
+    calls = {"run": 0, "run_streamed": 0}
+
+    class FakeRunResult:
+        final_output = "done"
+
+    async def fake_run(*args, **kwargs):
+        calls["run"] += 1
+        return FakeRunResult()
+
+    def fake_run_streamed(*args, **kwargs):
+        calls["run_streamed"] += 1
+        raise AssertionError("run_streamed should not be used")
+
+    monkeypatch.setattr("agent_runtime.core.orchestrator.Runner.run", fake_run)
+    monkeypatch.setattr("agent_runtime.core.orchestrator.Runner.run_streamed", fake_run_streamed)
+
+    result = asyncio.run(runtime.ask("hello", "session-plain"))
+
+    assert result["final_output"] == "done"
+    assert calls == {"run": 1, "run_streamed": 0}
+
+
+def test_runtime_ask_streams_only_output_text_delta(tmp_path, monkeypatch):
+    runtime = AgentRuntime(
+        backend=load_database_backend(Path(".")),
+        base_url="http://example.test/v1",
+        model_name="orchestrator",
+        api_key="not-needed",
+        session_db_path=tmp_path / "sessions.sqlite",
+        sql_base_url="http://example.test/sql/v1",
+        sql_model_name="sql",
+    )
+    deltas: list[str] = []
+
+    class FakeStreamedResult:
+        final_output = "当前答案"
+
+        async def stream_events(self):
+            yield SimpleNamespace(
+                type="raw_response_event",
+                data=SimpleNamespace(type="response.output_text.delta", delta="当前"),
+            )
+            yield SimpleNamespace(
+                type="raw_response_event",
+                data=SimpleNamespace(type="response.reasoning_text.delta", delta="内部"),
+            )
+            yield SimpleNamespace(
+                type="raw_response_event",
+                data=SimpleNamespace(type="response.function_call_arguments.delta", delta="{}"),
+            )
+            yield SimpleNamespace(
+                type="raw_response_event",
+                data=SimpleNamespace(type="response.output_text.delta", delta="答案"),
+            )
+            yield SimpleNamespace(type="run_item_stream_event", data=None)
+
+    async def fake_run(*args, **kwargs):
+        raise AssertionError("run should not be used")
+
+    def fake_run_streamed(*args, **kwargs):
+        return FakeStreamedResult()
+
+    monkeypatch.setattr("agent_runtime.core.orchestrator.Runner.run", fake_run)
+    monkeypatch.setattr("agent_runtime.core.orchestrator.Runner.run_streamed", fake_run_streamed)
+
+    result = asyncio.run(
+        runtime.ask(
+            "hello",
+            "session-stream",
+            model_delta_callback=lambda payload: deltas.append(payload["delta"]),
+        )
+    )
+
+    assert deltas == ["当前", "答案"]
+    assert result["final_output"] == "当前答案"

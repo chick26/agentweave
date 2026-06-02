@@ -24,7 +24,14 @@ export async function askAgentWeave(message: string): Promise<string> {
       if (event.type === "result_created") {
         console.log("result:", event.result_id, event.sample_rows);
       }
+      if (event.type === "model_delta") {
+        console.log("model delta:", event.payload.kind, event.payload.delta);
+        if (event.payload.kind === "orchestration_model") {
+          answer += event.payload.delta;
+        }
+      }
       if (event.type === "run_complete") {
+        // Final answer is authoritative; use it to recover from missed SSE chunks.
         answer = event.answer;
       }
       if (event.type === "run_error") {

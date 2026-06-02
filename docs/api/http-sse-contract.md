@@ -2,7 +2,8 @@
 
 本文定义外部 TS Web 前端对接 AgentWeave Python 后端时使用的 HTTP/SSE 协议。TS Web 项目只依赖这里描述的接口，不依赖 Python 包内部结构。
 
-> 状态：这是后端服务层的目标契约。当前仓库会先用本文档和 contract test 锁定协议，再实现 `agent_runtime.server`。
+> 状态：第一版由 FastAPI 版 `agent_runtime.server` 实现，可通过 `python -m agent_runtime.server` 启动。
+> 设计过程与取舍记录见 `docs/iterations/04-fastapi-sse-api-design.md`。
 
 ## 基础约定
 
@@ -12,10 +13,23 @@
 - SSE 响应头：`Content-Type: text/event-stream`
 - 时间字段：ISO 8601 字符串，使用后端 runtime 生成的 timestamp。
 - 分页参数：`page` 从 1 开始，`page_size` 默认 100，最大值由后端配置限制。
+- SSE 支持 `Last-Event-ID` 或 `after_sequence` 继续读取当前进程内已缓存事件。
+- SSE 空闲时会发送 `:keepalive` 注释帧，前端解析 JSON 时应忽略注释行。
+- 已完成/失败 run 默认在内存保留最多 1000 条、6 小时；诊断详情以 SQLite 为准。
 
 浏览器原生 `EventSource` 不能设置 Authorization header。TS Web 推荐用 `fetch + ReadableStream` 或 `@microsoft/fetch-event-source` 订阅 SSE。
 
 ## Endpoints
+
+### `GET /health`
+
+健康检查。
+
+Response `200`:
+
+```json
+{"status": "ok"}
+```
 
 ### `POST /sessions`
 
@@ -86,12 +100,16 @@ Response `202`:
 SSE 示例：
 
 ```text
+id: 1
 event: runtime_event
 data: {"type":"runtime_event","run_id":"run_01HXYZ","sequence":1,"timestamp":"2026-06-01T10:00:00Z","payload":{"kind":"agent_start","payload":{"stage":"agent_start"}}}
 
+id: 8
 event: run_complete
 data: {"type":"run_complete","run_id":"run_01HXYZ","session_id":"web-9f0c1b2a","sequence":8,"timestamp":"2026-06-01T10:00:08Z","answer":"403机房有 12 个可用机柜。","result_ids":["res_abc"]}
 ```
+
+如果后端启用了模型流式输出，`run_complete` 之前还会出现 `model_delta`。前端应根据 `payload.kind`、`payload.stage`、`payload.title`、`payload.model` 自行决定展示位置；`run_complete.answer` 仍是最终答案的权威值。
 
 ### `GET /runs/{run_id}`
 
@@ -135,6 +153,16 @@ Response `200`:
   "sql": "SELECT ...",
   "download_url": "/results/res_abc.csv"
 }
+```
+
+### `GET /results/{result_id}.csv`
+
+导出 ResultStore 中已保存的结果行。
+
+Response `200`:
+
+```text
+Content-Type: text/csv; charset=utf-8
 ```
 
 ### `GET /diagnostics/{run_id}`
@@ -187,6 +215,29 @@ Response `200`:
 
 ## SSE Event Types
 
+一次问答 run 内通过 runtime `event_callback` 发出的事件都会进入 `/runs/{run_id}/events`，后端统一包装为 `runtime_event`。常见 `payload.kind` 包括：
+
+- `agent_start` / `agent_end` / `error`
+- `subagent_dispatch` / `subagent_complete` / `subagent_trace`
+- `tool_call_start` / `tool_result` / `tool_call_end`
+- `result_created`
+- `memory_read` / `memory_write` / `memory_event`
+- `todo_event`
+- `context_compressed`
+
+后端还会额外派生 Web 友好的 SSE 事件：
+
+- `result_created`：从 runtime `result_created` 提炼出 `result_id`、`sample_rows`、`row_count`、`has_more`。
+- `model_delta`：模型输出增量，包含 `kind/stage/title/model/delta` 元信息；后端不判断展示位置。
+- `run_complete`：run 成功结束，包含最终 `answer` 和 `result_ids`。
+- `run_error`：run 失败结束，包含 `error`、`message` 和可选 `diagnostic_run_id`。
+- `:keepalive`：SSE comment frame，不是 JSON 事件，前端应忽略。
+
+不进入 run SSE 的内容：
+
+- Model call 详细日志不默认实时推送；前端通过 `GET /diagnostics/{run_id}` 读取 `model_calls`。
+- run 生命周期外的 HTTP 动作不进入 `/runs/{run_id}/events`，例如 `POST /sessions` 的 welcome message、独立 `POST /resources/reload` 的返回值。
+
 ### `runtime_event`
 
 透传现有 `RuntimeEvent`，用于执行过程展示。
@@ -221,6 +272,26 @@ Response `200`:
   "sample_rows": [{"available_count": 12}],
   "row_count": 1,
   "has_more": false
+}
+```
+
+### `model_delta`
+
+模型输出增量。前端收到后根据 payload 元信息决定展示在对话区、执行过程还是 diagnostics。
+
+```json
+{
+  "type": "model_delta",
+  "run_id": "run_01HXYZ",
+  "sequence": 6,
+  "timestamp": "2026-06-01T10:00:06Z",
+  "payload": {
+    "kind": "orchestration_model",
+    "stage": "model_delta",
+    "title": "编排模型调用",
+    "model": "Qwen/Qwen3-32B",
+    "delta": "403机房"
+  }
 }
 ```
 
@@ -302,6 +373,20 @@ export interface ResultCreatedEvent {
   has_more: boolean;
 }
 
+export interface ModelDeltaEvent {
+  type: "model_delta";
+  run_id: string;
+  sequence: number;
+  timestamp: string;
+  payload: {
+    kind: string;
+    stage?: string;
+    title?: string;
+    model?: string;
+    delta: string;
+  };
+}
+
 export interface RunCompleteEvent {
   type: "run_complete";
   run_id: string;
@@ -327,6 +412,7 @@ export interface RunErrorEvent {
 export type AgentWeaveSseEvent =
   | RuntimeEvent
   | ResultCreatedEvent
+  | ModelDeltaEvent
   | RunCompleteEvent
   | RunErrorEvent;
 

@@ -19,3 +19,7 @@
 - [TS Web 接入指南](frontend/ts-web-integration.md)
 - [TS Web UI 设计建议](frontend/ui-design.md)
 - [最小 TypeScript 示例](frontend/examples/)
+
+## 迭代记录
+
+- [FastAPI 与 SSE API 设计过程](iterations/04-fastapi-sse-api-design.md)

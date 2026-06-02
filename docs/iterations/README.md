@@ -5,3 +5,4 @@
 - [Text2SQL 调用链审查](01-text2sql-call-chain-review.md)
 - [从纯工具式 Text2SQL 到 Subagent + Memory 架构](02-main-to-subagent-memory-upgrade.md)
 - [基于 pi-agent 思路的 AgentWeave Runtime 分层重构](03-pi-agent-runtime-refactor.md)
+- [FastAPI 与 SSE API 设计过程](04-fastapi-sse-api-design.md)
