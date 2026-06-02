@@ -16,6 +16,10 @@ data/*
 
 docs/iterations/
 
+# Local frontend handoff docs
+docs/frontend/
+tests/test_frontend_contract_docs.py
+
 .streamlit_agent_sessions.sqlite
 .streamlit_agent_sessions.sqlite-shm
 .streamlit_agent_sessions.sqlite-wal
