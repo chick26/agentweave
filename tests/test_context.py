@@ -34,13 +34,12 @@ def test_run_context_keeps_worker_state_and_subagent_trace(tmp_path):
         run_id="worker-1",
         backend=_backend(tmp_path),
         model_profiles={},
-        active_domain="demo",
-        active_table="demo",
+        state={"active_domain": "demo", "active_table": "demo"},
     )
 
     context.emit_subagent_trace({"stage": "execute"})
 
     assert isinstance(context, BaseContext)
-    assert context.active_domain == "demo"
+    assert context.state["active_domain"] == "demo"
     assert context.events[0]["kind"] == "subagent_trace"
     assert context.events[0]["run_id"] == "worker-1"

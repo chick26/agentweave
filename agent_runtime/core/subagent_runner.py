@@ -17,7 +17,7 @@ from agents import (
 )
 from agents.tool import FunctionTool
 from agents.tool_context import ToolContext
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from agent_runtime.core.context import OrchestratorContext, RunContext
 from agent_runtime.core.events import EventKind
@@ -93,14 +93,49 @@ class SubagentResult(BaseModel):
     # Deprecated compatibility field. New code should use `subagent`.
     skill: str = ""
     subagent: str = ""
-    domain: str = ""
-    sql: str = ""
-    result_id: str = ""
-    row_count: int = 0
-    truncated: bool = False
-    rows: list[dict[str, Any]] = Field(default_factory=list)
     trace: list[dict[str, Any]] = Field(default_factory=list)
     error: str = ""
+    extras: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_extras(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            known_fields = {"answer", "skill", "subagent", "trace", "error", "extras"}
+            extras = data.get("extras") or {}
+            if not isinstance(extras, dict):
+                extras = {}
+            else:
+                extras = dict(extras)
+            for k, v in list(data.items()):
+                if k not in known_fields:
+                    extras[k] = data.pop(k)
+            data["extras"] = extras
+        return data
+
+    @property
+    def domain(self) -> str:
+        return self.extras.get("domain", "")
+
+    @property
+    def sql(self) -> str:
+        return self.extras.get("sql", "")
+
+    @property
+    def result_id(self) -> str:
+        return self.extras.get("result_id", "")
+
+    @property
+    def row_count(self) -> int:
+        return int(self.extras.get("row_count") or 0)
+
+    @property
+    def truncated(self) -> bool:
+        return bool(self.extras.get("truncated"))
+
+    @property
+    def rows(self) -> list[dict[str, Any]]:
+        return self.extras.get("rows") or []
 
 
 class SubagentToolInput(BaseModel):
@@ -145,7 +180,7 @@ class SubagentRunner:
                 error=f"Unsupported execution mode: {manifest.execution.mode}",
             )
 
-        model_role = self._resolve_model_role(manifest)
+        model_role = self.resolve_model_role(manifest)
         if not model_role:
             return SubagentResult(
                 answer=f"Subagent `{subagent_name}` is missing execution.model_role.",
@@ -290,7 +325,7 @@ class SubagentRunner:
             model_settings=ModelSettings(
                 max_tokens=profile.max_tokens,
                 tool_choice="auto",
-                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+                extra_body=self._get_extra_body(manifest, profile),
             ),
             tools=self._build_subagent_tools(manifest),
         )
@@ -336,10 +371,28 @@ class SubagentRunner:
         tool.on_invoke_tool = invoke_tool
         return tool
 
-    def _resolve_model_role(self, manifest: AgentManifest) -> str:
+    def resolve_model_role(self, manifest: AgentManifest) -> str:
         model_role = manifest.execution.model_role
         model_role = os.getenv(f"{_subagent_env_prefix(manifest.name)}_MODEL_ROLE", model_role)
         return model_role
+
+    def _get_extra_body(self, manifest: AgentManifest, profile: Any) -> dict[str, Any]:
+        extra_body = getattr(profile, "extra_body", None)
+        if extra_body is None:
+            env_extra = os.getenv(f"{_subagent_env_prefix(manifest.name)}_EXTRA_BODY") or os.getenv("WORKER_EXTRA_BODY")
+            if env_extra:
+                try:
+                    extra_body = json.loads(env_extra)
+                except Exception:
+                    pass
+        if extra_body is None:
+            model_name = getattr(profile, "model_name", "") or ""
+            model_lower = model_name.lower()
+            if "qwen" in model_lower or "thinking" in model_lower:
+                extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+            else:
+                extra_body = {}
+        return extra_body
 
     def _resolve_max_turns(self, manifest: AgentManifest) -> int:
         default = manifest.execution.max_turns or WORKER_MAX_TURNS
@@ -463,33 +516,63 @@ def _fallback_result_from_trace(
 ) -> SubagentResult:
     subagent_name = subagent_name or skill_name
     execute_payload = _last_trace_payload(run_ctx.events, "execute")
+    tool_result_payload = None
     if execute_payload is None:
+        for event in reversed(run_ctx.events):
+            if event.get("kind") == EventKind.TOOL_RESULT:
+                tool_result_payload = event.get("payload") or {}
+                break
+
+    if execute_payload is not None:
+        output = execute_payload.get("output") or {}
+        rows = output.get("sample_rows", output.get("rows", []))
+        if not isinstance(rows, list):
+            rows = []
+        sql = str(output.get("sql") or execute_payload.get("input") or "")
+        result_id = str(output.get("result_id") or "")
+        row_count = int(output.get("row_count") or len(rows))
+        truncated = bool(output.get("truncated"))
         return SubagentResult(
             skill=subagent_name,
             subagent=subagent_name,
-            domain=run_ctx.active_domain,
             trace=[event.get("payload", {}) for event in run_ctx.events],
             error=f"worker_timeout: {error}",
+            domain=run_ctx.state.get("active_domain", ""),
+            sql=sql,
+            result_id=result_id,
+            row_count=row_count,
+            truncated=truncated,
+            rows=rows,
         )
-    output = execute_payload.get("output")
-    if not isinstance(output, dict):
-        output = {}
-    rows = output.get("sample_rows", output.get("rows", []))
-    if not isinstance(rows, list):
-        rows = []
-    sql = str(output.get("sql") or execute_payload.get("input") or "")
-    result_id = str(output.get("result_id") or "")
+    elif tool_result_payload is not None:
+        metadata = tool_result_payload.get("metadata") or {}
+        ui_content = tool_result_payload.get("ui_content") or {}
+        sql = str(metadata.get("sql") or tool_result_payload.get("input") or "")
+        result_id = str(metadata.get("result_id") or "")
+        rows = metadata.get("sample_rows") or metadata.get("rows") or ui_content.get("sample_rows") or []
+        if not isinstance(rows, list):
+            rows = []
+        row_count = int(metadata.get("row_count") or len(rows))
+        truncated = bool(metadata.get("truncated") or metadata.get("store_truncated"))
+        return SubagentResult(
+            skill=subagent_name,
+            subagent=subagent_name,
+            trace=[event.get("payload", {}) for event in run_ctx.events],
+            error=f"worker_timeout: {error}",
+            domain=run_ctx.state.get("active_domain", ""),
+            sql=sql,
+            result_id=result_id,
+            row_count=row_count,
+            truncated=truncated,
+            rows=rows,
+        )
+
     return SubagentResult(
         skill=subagent_name,
         subagent=subagent_name,
-        domain=run_ctx.active_domain,
-        sql=sql,
-        result_id=result_id,
-        row_count=int(output.get("row_count") or len(rows)),
-        truncated=bool(output.get("truncated")),
-        rows=rows,
         trace=[event.get("payload", {}) for event in run_ctx.events],
         error=f"worker_timeout: {error}",
+        domain=run_ctx.state.get("active_domain", ""),
     )
 
 
@@ -529,19 +612,21 @@ async def _extract_worker_agent_tool_output(value: Any) -> str:
 
 
 def _subagent_tool_payload(result: SubagentResult) -> dict[str, Any]:
-    payload = _model_dump(result)
-    payload["sample_rows"] = payload.pop("rows", [])
-    return {
-        "answer": payload.get("answer", ""),
-        "error": payload.get("error", ""),
-        "subagent": payload.get("subagent") or payload.get("skill", ""),
-        "domain": payload.get("domain", ""),
-        "sql": payload.get("sql", ""),
-        "result_id": payload.get("result_id", ""),
-        "row_count": int(payload.get("row_count") or 0),
-        "truncated": bool(payload.get("truncated")),
-        "sample_rows": payload.get("sample_rows", []),
+    payload = {
+        "answer": result.answer,
+        "error": result.error,
+        "subagent": result.subagent or result.skill,
     }
+    payload["domain"] = result.domain
+    payload["sql"] = result.sql
+    payload["result_id"] = result.result_id
+    payload["row_count"] = result.row_count
+    payload["truncated"] = result.truncated
+    payload["sample_rows"] = result.rows
+    for k, v in result.extras.items():
+        if k not in {"domain", "sql", "result_id", "row_count", "truncated", "rows", "sample_rows"}:
+            payload[k] = v
+    return payload
 
 
 def _subagent_env_prefix(subagent_name: str) -> str:

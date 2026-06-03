@@ -7,6 +7,9 @@ runtime_env:
   kind: local
   setup_module: subagents.text2sql.env
   mode: manual
+  test:
+    command: "python -m pytest tests/test_text2sql_tools.py"
+    env_file: ".agentweave/text2sql.env"
 tools:
   - get_current_time
   - list_domains

@@ -43,7 +43,7 @@ from agent_runtime.core.runtime_utils import (
     json_dumps,
     to_jsonable,
 )
-from agent_runtime.core.settings import build_model_profiles, load_database_backend
+from agent_runtime.core.settings import build_model_profiles
 from agent_runtime.core.tool_protocol import ToolOutput
 from agent_runtime.registry.bot_registry import BotConfig, BotRegistry
 from agent_runtime.registry.resources import ResourceLoader
@@ -112,8 +112,17 @@ class AgentRuntime:
         if backend is None:
             if tables is not None:
                 backend = CsvSQLiteBackend(tables)
-            elif os.getenv("TEXT2SQL_BACKEND", "").strip():
-                backend = load_database_backend(self.root)
+            else:
+                for manifest in self.agent_registry.discover():
+                    if manifest.runtime_env and manifest.runtime_env.setup_module:
+                        try:
+                            import importlib
+                            mod = importlib.import_module(manifest.runtime_env.setup_module)
+                            if hasattr(mod, "connect_prepared_backend"):
+                                backend = mod.connect_prepared_backend(root=self.root)
+                                break
+                        except Exception:
+                            pass
         self.backend = backend
         self.timezone_name = timezone_name or os.getenv("TEXT2SQL_TIMEZONE", "Asia/Hong_Kong")
         self.model_profiles = build_model_profiles(
@@ -357,7 +366,7 @@ class AgentRuntime:
                 continue
             if manifest.execution.mode != "worker":
                 continue
-            model_role = self.subagent_runner._resolve_model_role(manifest)
+            model_role = self.subagent_runner.resolve_model_role(manifest)
             if not model_role:
                 continue
             profile = self.model_profiles[model_role]

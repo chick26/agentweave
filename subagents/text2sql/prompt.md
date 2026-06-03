@@ -47,13 +47,15 @@
 {
   "answer": "中文简洁回答",
   "subagent": "text2sql",
-  "domain": "激活的 domain 名称",
-  "sql": "最终执行的 SQL",
-  "result_id": "execute_sql 返回的 result_id",
-  "row_count": 0,
-  "truncated": false,
-  "rows": [],
   "trace": [],
-  "error": ""
+  "error": "",
+  "extras": {
+    "domain": "激活的 domain 名称",
+    "sql": "最终执行的 SQL",
+    "result_id": "execute_sql 返回的 result_id",
+    "row_count": 0,
+    "truncated": false,
+    "rows": []
+  }
 }
 </output_json_schema>

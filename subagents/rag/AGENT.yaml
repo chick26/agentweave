@@ -8,6 +8,9 @@ runtime_env:
   kind: local
   setup_module: subagents.rag.env
   mode: lazy
+  test:
+    command: "python -m pytest tests/test_rag_subagent.py"
+    env_file: ".agentweave/rag.env"
 tools:
   - search_knowledge_base
 memory:

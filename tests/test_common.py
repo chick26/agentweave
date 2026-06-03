@@ -4,11 +4,11 @@ from agent_runtime.common import (
     coerce_bool,
     columns_from_rows,
     load_runtime_env_files,
-    quote_identifier,
     split_frontmatter,
     utc_now_iso,
     xml_escape,
 )
+from agent_runtime.storage.database import quote_identifier
 import pytest
 
 

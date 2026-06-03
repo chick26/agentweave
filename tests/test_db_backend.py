@@ -6,8 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_runtime.core.runtime_utils import extract_sql, get_current_time_payload
-from agent_runtime.core.settings import load_csv_tables, load_database_backend
+from agent_runtime.core.runtime_utils import get_current_time_payload
+from subagents.text2sql.scripts.sql_generation import extract_sql
+from subagents.text2sql.env import load_csv_tables, load_database_backend
 from agent_runtime.storage.database import (
     CsvSQLiteBackend,
     SqlDatabaseBackend,

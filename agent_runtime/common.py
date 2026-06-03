@@ -80,12 +80,15 @@ def load_env_file(path: Path, *, override: bool = False) -> None:
 
 def load_runtime_env_files(root: Path) -> list[Path]:
     """Load local runtime env files in the standard AgentWeave order."""
-    paths = [
-        root / ".env",
-        root / ".agentweave" / "runtime.env",
-        root / ".agentweave" / "text2sql.env",
-        root / ".agentweave" / "rag.env",
-    ]
+    paths = [root / ".env"]
+    runtime_env = root / ".agentweave" / "runtime.env"
+    if runtime_env.exists():
+        paths.append(runtime_env)
+    agentweave_dir = root / ".agentweave"
+    if agentweave_dir.is_dir():
+        for item in sorted(agentweave_dir.glob("*.env")):
+            if item.name != "runtime.env" and item not in paths:
+                paths.append(item)
     loaded: list[Path] = []
     for path in paths:
         if not path.exists():
@@ -105,16 +108,6 @@ def columns_from_rows(rows: list[dict[str, Any]]) -> list[str]:
                 seen.add(name)
                 columns.append(name)
     return columns
-
-
-def validate_identifier(identifier: str) -> None:
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", identifier):
-        raise ValueError(f"Unsafe SQL identifier: {identifier}")
-
-
-def quote_identifier(identifier: str) -> str:
-    validate_identifier(identifier)
-    return f'"{identifier}"'
 
 
 def file_signature(paths: list[Path]) -> tuple[tuple[str, int, int], ...]:

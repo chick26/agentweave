@@ -9,7 +9,14 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import unquote, urlparse
 
-from agent_runtime.common import quote_identifier, validate_identifier
+def validate_identifier(identifier: str) -> None:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", identifier):
+        raise ValueError(f"Unsafe SQL identifier: {identifier}")
+
+
+def quote_identifier(identifier: str) -> str:
+    validate_identifier(identifier)
+    return f'"{identifier}"'
 
 
 @dataclass(frozen=True)

@@ -44,52 +44,7 @@ class LinkedValueInput(BaseModel):
     query: str = ""
 
 
-def _emit_tool_start(
-    run_ctx: RunContext,
-    *,
-    tool_name: str,
-    input_payload: dict[str, Any],
-) -> None:
-    run_ctx.emit_payload(
-        kind=EventKind.TOOL_CALL_START,
-        payload={
-            "stage": "tool_call_start",
-            "tool_name": tool_name,
-            "input": input_payload,
-        },
-    )
-
-
-def _emit_tool_finish(
-    run_ctx: RunContext,
-    *,
-    tool_name: str,
-    tool_output: ToolOutput,
-    status: str = "completed",
-) -> None:
-    error = str(tool_output.metadata.get("error") or "")
-    run_ctx.emit_payload(
-        kind=EventKind.TOOL_RESULT,
-        payload={
-            "stage": "tool_result",
-            "tool_name": tool_name,
-            "status": status,
-            "ui_content": tool_output.ui_content,
-            "metadata": tool_output.metadata,
-            "error": error,
-        },
-        error=error,
-    )
-    run_ctx.emit_payload(
-        kind=EventKind.TOOL_CALL_END,
-        payload={
-            "stage": "tool_call_end",
-            "tool_name": tool_name,
-            "status": status,
-            "error": error,
-        },
-        error=error,
-    )
+from agent_runtime.core.tool_helpers import emit_tool_start, emit_tool_finish
 
 
 @function_tool
@@ -107,7 +62,7 @@ async def get_current_time(
         timezone_name: Optional IANA timezone name. Empty means application default.
     """
     run_ctx = ctx.context
-    _emit_tool_start(
+    emit_tool_start(
         run_ctx,
         tool_name="get_current_time",
         input_payload={"timezone_name": timezone_name},
@@ -133,7 +88,7 @@ async def get_current_time(
             "error": output.get("error", "") if isinstance(output, dict) else "",
         },
     )
-    _emit_tool_finish(
+    emit_tool_finish(
         run_ctx,
         tool_name="get_current_time",
         tool_output=tool_output,
@@ -150,7 +105,7 @@ async def list_domains(ctx: RunContextWrapper[RunContext]) -> str:
     It returns only lightweight table/domain summaries, not full schemas.
     """
     run_ctx = ctx.context
-    _emit_tool_start(
+    emit_tool_start(
         run_ctx,
         tool_name="list_domains",
         input_payload={},
@@ -183,7 +138,7 @@ async def list_domains(ctx: RunContextWrapper[RunContext]) -> str:
         ui_content=payload,
         metadata={"tool_name": "list_domains", "error": payload.get("error") or ""},
     )
-    _emit_tool_finish(
+    emit_tool_finish(
         run_ctx,
         tool_name="list_domains",
         tool_output=tool_output,
@@ -207,7 +162,7 @@ async def get_domain_schema(
         domain_name: Domain name selected from <domains> or list_domains.
     """
     run_ctx = ctx.context
-    _emit_tool_start(
+    emit_tool_start(
         run_ctx,
         tool_name="get_domain_schema",
         input_payload={"domain_name": domain_name},
@@ -252,7 +207,7 @@ async def get_domain_schema(
             "error": payload.get("error") or "",
         },
     )
-    _emit_tool_finish(
+    emit_tool_finish(
         run_ctx,
         tool_name="get_domain_schema",
         tool_output=tool_output,
@@ -280,14 +235,14 @@ async def search_domain_values(
     """
     run_ctx = ctx.context
     input_payload = {"domain_name": domain_name, "query": query, "fields": fields or []}
-    _emit_tool_start(
+    emit_tool_start(
         run_ctx,
         tool_name="search_domain_values",
         input_payload=input_payload,
     )
     try:
         domain = _domain_catalog_from_context(ctx).get_domain(domain_name)
-        if run_ctx.active_domain != domain.name or run_ctx.active_table != domain.table:
+        if run_ctx.state.get("active_domain") != domain.name or run_ctx.state.get("active_table") != domain.table:
             _activate_domain_context(run_ctx, domain)
         linked_values = _search_value_candidates(run_ctx, query, fields)
         payload = {
@@ -312,7 +267,7 @@ async def search_domain_values(
             "error": payload.get("error") or "",
         },
     )
-    _emit_tool_finish(
+    emit_tool_finish(
         run_ctx,
         tool_name="search_domain_values",
         tool_output=tool_output,
@@ -349,7 +304,7 @@ async def generate_readonly_sql(
         "linked_values": linked_value_payloads,
         "constraints": constraints,
     }
-    _emit_tool_start(
+    emit_tool_start(
         run_ctx,
         tool_name="generate_readonly_sql",
         input_payload=input_payload,
@@ -395,7 +350,7 @@ async def generate_readonly_sql(
             "error": payload.get("error") or payload.get("validation_error") or "",
         },
     )
-    _emit_tool_finish(
+    emit_tool_finish(
         run_ctx,
         tool_name="generate_readonly_sql",
         tool_output=tool_output,
@@ -433,7 +388,7 @@ async def execute_sql(
     )
     try:
         domain = _domain_catalog_from_context(ctx).get_domain(domain_name)
-        if run_ctx.active_domain != domain.name or run_ctx.active_table != domain.table:
+        if run_ctx.state.get("active_domain") != domain.name or run_ctx.state.get("active_table") != domain.table:
             _activate_domain_context(run_ctx, domain)
         validate_sql_uses_selected_schema(
             sql,
@@ -533,10 +488,10 @@ async def execute_sql(
 
 def _activate_domain_context(run_ctx: RunContext, domain: Any) -> str:
     backend = _require_backend(run_ctx)
-    run_ctx.active_domain = domain.name
-    run_ctx.active_table = domain.table
-    run_ctx.active_text_fields = list(domain.text_fields)
-    run_ctx.active_field_descriptions = dict(domain.field_descriptions)
+    run_ctx.state["active_domain"] = domain.name
+    run_ctx.state["active_table"] = domain.table
+    run_ctx.state["active_text_fields"] = list(domain.text_fields)
+    run_ctx.state["active_field_descriptions"] = dict(domain.field_descriptions)
     schema_text = backend.get_schema_for_prompt(
         domain.table,
         domain.field_descriptions,
@@ -562,15 +517,15 @@ def _search_value_candidates(
     field_list: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     backend = _require_backend(run_ctx)
-    selected_columns = set(backend.get_columns(run_ctx.active_table))
+    selected_columns = set(backend.get_columns(run_ctx.state.get("active_table", "")))
     fields = [
-        field for field in list(field_list or run_ctx.active_text_fields)
+        field for field in list(field_list or run_ctx.state.get("active_text_fields", []))
         if field in selected_columns
     ]
     results: list[dict[str, Any]] = []
     for field_name in fields:
         for value, count in backend.search_distinct_values(
-            run_ctx.active_table,
+            run_ctx.state.get("active_table", ""),
             field_name,
             query,
             limit=10,
@@ -605,7 +560,7 @@ def _build_execute_output(
     if result_store is not None:
         result_id = result_store.create_result(
             run_id=run_ctx.run_id,
-            domain=run_ctx.active_domain,
+            domain=run_ctx.state.get("active_domain", ""),
             sql=sql,
             rows=rows,
         )

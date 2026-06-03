@@ -6,73 +6,78 @@ from agent_runtime.common import coerce_bool
 
 
 def extract_result_metadata(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Extract result-store metadata from subagent execute trace events."""
+    """Extract result-store metadata from subagent execute trace events or tool results."""
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
     for event in events:
-        if event.get("kind") == "result_created":
-            ui_content = event.get("payload", {}).get("ui_content")
-            if not isinstance(ui_content, dict):
-                continue
-            result_id = ui_content.get("result_id")
-            if not result_id or result_id in seen:
-                continue
-            seen.add(str(result_id))
-            results.append(
-                {
-                    "result_id": str(result_id),
-                    "row_count": int(ui_content.get("row_count") or 0),
-                    "stored_row_count": int(
-                        ui_content.get("stored_row_count")
-                        or ui_content.get("row_count")
-                        or 0
-                    ),
-                    "columns": ui_content.get("columns")
-                    if isinstance(ui_content.get("columns"), list)
-                    else [],
-                    "sample_rows": ui_content.get("sample_rows")
-                    if isinstance(ui_content.get("sample_rows"), list)
-                    else [],
-                    "sample_size": int(ui_content.get("sample_size") or 0),
-                    "truncated": coerce_bool(ui_content.get("truncated")),
-                    "store_truncated": coerce_bool(ui_content.get("store_truncated")),
-                    "has_more": coerce_bool(
-                        ui_content.get("has_more") or ui_content.get("store_truncated")
-                    ),
-                    "row_count_is_exact": coerce_bool(
-                        ui_content.get("row_count_is_exact", not ui_content.get("store_truncated"))
-                    ),
-                    "sql": str(ui_content.get("sql") or ""),
-                }
-            )
+        kind = event.get("kind")
+        payload = event.get("payload") or {}
+        if not isinstance(payload, dict):
             continue
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
-        if not isinstance(payload, dict) or payload.get("stage") != "execute":
+
+        # 1. Check result_created event
+        if kind == "result_created":
+            ui_content = payload.get("ui_content")
+            if isinstance(ui_content, dict):
+                result_id = ui_content.get("result_id")
+                if result_id and result_id not in seen:
+                    seen.add(str(result_id))
+                    results.append(_parse_result_dict(ui_content, result_id))
             continue
-        output = payload.get("output")
-        if not isinstance(output, dict):
+
+        # 2. Check tool_result event
+        if kind == "tool_result":
+            metadata = payload.get("metadata") or {}
+            ui_content = payload.get("ui_content") or {}
+            result_id = metadata.get("result_id") or ui_content.get("result_id")
+            if result_id and result_id not in seen:
+                seen.add(str(result_id))
+                merged = {**ui_content, **metadata}
+                results.append(_parse_result_dict(merged, result_id))
             continue
-        result_id = output.get("result_id")
-        if not result_id or result_id in seen:
+
+        # 3. Check legacy/fallback "execute" subagent trace for backward compatibility
+        if payload.get("stage") == "execute":
+            output = payload.get("output")
+            if isinstance(output, dict):
+                result_id = output.get("result_id")
+                if result_id and result_id not in seen:
+                    seen.add(str(result_id))
+                    sql = output.get("sql") or payload.get("input") or ""
+                    parsed = _parse_result_dict(output, result_id)
+                    if sql and not parsed.get("sql"):
+                        parsed["sql"] = str(sql)
+                    results.append(parsed)
             continue
-        seen.add(str(result_id))
-        results.append(
-            {
-                "result_id": str(result_id),
-                "row_count": int(output.get("row_count") or 0),
-                "stored_row_count": int(output.get("stored_row_count") or output.get("row_count") or 0),
-                "columns": output.get("columns") if isinstance(output.get("columns"), list) else [],
-                "sample_rows": output.get("sample_rows")
-                if isinstance(output.get("sample_rows"), list)
-                else [],
-                "sample_size": int(output.get("sample_size") or 0),
-                "truncated": coerce_bool(output.get("truncated")),
-                "store_truncated": coerce_bool(output.get("store_truncated")),
-                "has_more": coerce_bool(output.get("has_more") or output.get("store_truncated")),
-                "row_count_is_exact": coerce_bool(
-                    output.get("row_count_is_exact", not output.get("store_truncated"))
-                ),
-                "sql": str(output.get("sql") or payload.get("input") or ""),
-            }
-        )
+
     return results
+
+
+def _parse_result_dict(data: dict[str, Any], result_id: Any) -> dict[str, Any]:
+    rows = data.get("sample_rows") or data.get("rows") or []
+    if not isinstance(rows, list):
+        rows = []
+
+    return {
+        "result_id": str(result_id),
+        "row_count": int(data.get("row_count") or 0),
+        "stored_row_count": int(
+            data.get("stored_row_count")
+            or data.get("row_count")
+            or 0
+        ),
+        "columns": data.get("columns")
+        if isinstance(data.get("columns"), list)
+        else [],
+        "sample_rows": rows,
+        "sample_size": int(data.get("sample_size") or len(rows)),
+        "truncated": coerce_bool(data.get("truncated")),
+        "store_truncated": coerce_bool(data.get("store_truncated")),
+        "has_more": coerce_bool(
+            data.get("has_more") or data.get("store_truncated")
+        ),
+        "row_count_is_exact": coerce_bool(
+            data.get("row_count_is_exact", not data.get("store_truncated"))
+        ),
+        "sql": str(data.get("sql") or ""),
+    }

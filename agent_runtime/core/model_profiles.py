@@ -33,14 +33,15 @@ def load_model_profiles(
     sql_max_tokens: int | None = None,
     api_key: str | None = None,
 ) -> dict[str, ModelProfile]:
-    def _resolve_key(env_var_name: str) -> str:
-        if specific_key := os.getenv(env_var_name):
-            return specific_key
+    def _resolve_key(*env_var_names: str) -> str:
+        for name in env_var_names:
+            if specific_key := os.getenv(name):
+                return specific_key
         if api_key and api_key != "not-needed":
             return api_key
         return os.getenv("OPENAI_API_KEY", "not-needed")
 
-    orch_key = _resolve_key("QWEN36_API_KEY")
+    orch_key = _resolve_key("ORCHESTRATOR_API_KEY", "QWEN36_API_KEY")
     exec_key = _resolve_key("EXECUTOR_API_KEY")
     emb_key = _resolve_key("EMBEDDING_API_KEY")
 
@@ -48,13 +49,15 @@ def load_model_profiles(
         "orchestrator": ModelProfile(
             role="orchestrator",
             base_url=orchestrator_base_url
+            or os.getenv("ORCHESTRATOR_BASE_URL")
             or os.getenv("QWEN36_BASE_URL", "http://localhost:8000/v1"),
             model_name=orchestrator_model
+            or os.getenv("ORCHESTRATOR_MODEL")
             or os.getenv("QWEN36_MODEL", "qwen3.6-27b"),
             api_key=orch_key,
             max_tokens=orchestrator_max_tokens
-            or int(os.getenv("QWEN36_MAX_TOKENS", "8192")),
-            context_window=int(os.getenv("QWEN36_CONTEXT_WINDOW", "32768")),
+            or int(os.getenv("ORCHESTRATOR_MAX_TOKENS") or os.getenv("QWEN36_MAX_TOKENS") or "8192"),
+            context_window=int(os.getenv("ORCHESTRATOR_CONTEXT_WINDOW") or os.getenv("QWEN36_CONTEXT_WINDOW") or "32768"),
         ),
         "executor": ModelProfile(
             role="executor",

@@ -188,10 +188,10 @@ def test_generic_subagent_env_model_role_override(monkeypatch):
     runner = SubagentRunner(registry=registry, root=Path("."))
     manifest = registry.get("text2sql")
 
-    assert runner._resolve_model_role(manifest) == "orchestrator"
+    assert runner.resolve_model_role(manifest) == "orchestrator"
 
     monkeypatch.setenv("SUBAGENT_TEXT2SQL_MODEL_ROLE", "executor")
-    assert runner._resolve_model_role(manifest) == "executor"
+    assert runner.resolve_model_role(manifest) == "executor"
 
 
 def test_missing_convention_tools_for_declared_tools_raises_clear_error(tmp_path):
@@ -329,7 +329,7 @@ def test_text2sql_worker_timeout_returns_latest_execute_result(tmp_path, monkeyp
 
     async def fake_runner_run(agent, input, **kwargs):
         run_ctx = kwargs["context"]
-        run_ctx.active_domain = "sea_cable_faults"
+        run_ctx.state["active_domain"] = "sea_cable_faults"
         run_ctx.emit_subagent_trace(
             {
                 "stage": "execute",

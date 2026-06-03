@@ -53,12 +53,9 @@ class RunContext(BaseContext):
     run_id: str
     runtime_root: Path | None = None
     active_subagent: str = ""
-    active_domain: str = ""
-    active_table: str = ""
-    active_text_fields: list[str] = field(default_factory=list)
-    active_field_descriptions: dict[str, str] = field(default_factory=dict)
     agent_registry: Any | None = None
     skill_registry: Any | None = None
+    state: dict[str, Any] = field(default_factory=dict)
 
     def emit_payload(
         self,

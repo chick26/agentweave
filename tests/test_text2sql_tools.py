@@ -33,7 +33,7 @@ def test_execute_sql_returns_result_pointer_and_sample(tmp_path, monkeypatch):
     store = ResultStore(tmp_path / "agent_results.sqlite")
     run_ctx = SimpleNamespace(
         run_id="run-1",
-        active_domain="sea_cable_faults",
+        state={"active_domain": "sea_cable_faults"},
         result_store=store,
     )
 
@@ -73,8 +73,7 @@ def test_execute_sql_emits_result_created_ui_event(tmp_path, monkeypatch):
         backend=backend,
         model_profiles={},
         result_store=store,
-        active_domain="sea_cable_faults",
-        active_table="sea_cable_faults",
+        state={"active_domain": "sea_cable_faults", "active_table": "sea_cable_faults"},
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
     )
 
@@ -163,8 +162,7 @@ def test_execute_sql_emits_failed_tool_lifecycle(tmp_path):
         backend=backend,
         model_profiles={},
         result_store=ResultStore(tmp_path / "agent_results.sqlite"),
-        active_domain="sea_cable_faults",
-        active_table="sea_cable_faults",
+        state={"active_domain": "sea_cable_faults", "active_table": "sea_cable_faults"},
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
     )
 
@@ -217,8 +215,7 @@ def test_execute_sql_marks_store_truncation_without_claiming_exact_total(tmp_pat
         backend=backend,
         model_profiles={},
         result_store=store,
-        active_domain="sea_cable_faults",
-        active_table="sea_cable_faults",
+        state={"active_domain": "sea_cable_faults", "active_table": "sea_cable_faults"},
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
     )
 

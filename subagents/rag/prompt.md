@@ -27,12 +27,6 @@
 {
   "answer": "中文简洁回答，包含来源说明",
   "subagent": "rag",
-  "domain": "knowledge_base",
-  "sql": "",
-  "result_id": "",
-  "row_count": 0,
-  "truncated": false,
-  "rows": [],
   "trace": [],
   "error": ""
 }

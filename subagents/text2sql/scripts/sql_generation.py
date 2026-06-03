@@ -5,10 +5,10 @@ from typing import Any
 from agent_runtime.core.context import RunContext
 from agent_runtime.core.runtime_utils import (
     call_chat_model,
-    extract_sql,
     json_dumps,
     make_async_client,
 )
+import re
 from agent_runtime.storage.database import validate_readonly_sql
 from subagents.text2sql.scripts.domain_catalog import DomainConfig, business_metrics_to_prompt
 from subagents.text2sql.scripts.prompts import SQL_GENERATION_PROMPT
@@ -108,3 +108,44 @@ async def generate_sql(
 def _require_backend_dialect(run_ctx: RunContext) -> str:
     backend = getattr(run_ctx, "backend", None)
     return str(getattr(backend, "dialect", "SQL"))
+
+
+def extract_sql(content: str) -> str:
+    stripped = content.strip()
+    fenced_sql = _extract_fenced_sql(stripped)
+    if fenced_sql:
+        return _normalize_sql_statement(fenced_sql)
+    if stripped.startswith("```"):
+        stripped = stripped.removeprefix("```sql").removeprefix("```").strip()
+        stripped = stripped.removesuffix("```").strip()
+        return _normalize_sql_statement(stripped)
+    match = re.search(r"\b(select|with)\b.+", stripped, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return stripped
+    sql = match.group(0).strip()
+    return _normalize_sql_statement(sql)
+
+
+def _extract_fenced_sql(content: str) -> str:
+    matches = re.findall(
+        r"```(?:sql|sqlite)?\s*(.*?)```",
+        content,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for candidate in reversed(matches):
+        if re.search(r"\b(select|with)\b", candidate, flags=re.IGNORECASE):
+            return candidate.strip()
+    return ""
+
+
+def _normalize_sql_statement(sql: str) -> str:
+    stripped = sql.strip()
+    if ";" in stripped:
+        stripped = stripped.split(";", 1)[0].strip()
+    kept: list[str] = []
+    for line in stripped.splitlines():
+        clean = line.strip()
+        if not clean:
+            continue
+        kept.append(clean)
+    return " ".join(kept)

@@ -170,20 +170,6 @@ def get_current_time_payload(
     }
 
 
-def extract_sql(content: str) -> str:
-    stripped = content.strip()
-    fenced_sql = _extract_fenced_sql(stripped)
-    if fenced_sql:
-        return _normalize_sql_statement(fenced_sql)
-    if stripped.startswith("```"):
-        stripped = stripped.removeprefix("```sql").removeprefix("```").strip()
-        stripped = stripped.removesuffix("```").strip()
-        return _normalize_sql_statement(stripped)
-    match = re.search(r"\b(select|with)\b.+", stripped, flags=re.IGNORECASE | re.DOTALL)
-    if not match:
-        return stripped
-    sql = match.group(0).strip()
-    return _normalize_sql_statement(sql)
 
 
 def _build_chat_messages_for_log(
@@ -212,29 +198,6 @@ def _build_tools_for_log(tools: list[Any], handoffs: list[Any]) -> list[dict[str
     return to_jsonable(_to_dump_compatible(converted_tools))
 
 
-def _extract_fenced_sql(content: str) -> str:
-    matches = re.findall(
-        r"```(?:sql|sqlite)?\s*(.*?)```",
-        content,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    for candidate in reversed(matches):
-        if re.search(r"\b(select|with)\b", candidate, flags=re.IGNORECASE):
-            return candidate.strip()
-    return ""
-
-
-def _normalize_sql_statement(sql: str) -> str:
-    stripped = sql.strip()
-    if ";" in stripped:
-        stripped = stripped.split(";", 1)[0].strip()
-    kept: list[str] = []
-    for line in stripped.splitlines():
-        clean = line.strip()
-        if not clean:
-            continue
-        kept.append(clean)
-    return " ".join(kept)
 
 
 def json_dumps(value: Any) -> str:

@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from agent_runtime.common import quote_identifier
+from agent_runtime.storage.database import quote_identifier
 from agent_runtime.registry.skill_registry import AgentRegistry
 from subagents.text2sql.env import manifest_csv_tables
 
