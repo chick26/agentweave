@@ -49,3 +49,22 @@ def test_resource_loader_reload_invalidates_registry_cache(tmp_path, monkeypatch
     assert summary["skills"]["added"] == ["two"]
     assert [skill.name for skill in loader.discover().skills] == ["one", "two"]
 
+
+def test_resource_loader_includes_bot_changes(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AGENT_PROJECT_RULES_PATH", raising=False)
+    loader = ResourceLoader(
+        root=tmp_path,
+        skill_registry=SkillRegistry(skills_root=tmp_path / "skills"),
+        agent_registry=AgentRegistry(subagents_root=tmp_path / "subagents"),
+    )
+
+    assert [bot.id for bot in loader.discover().bots] == ["default"]
+
+    _write(
+        tmp_path / "bots" / "one" / "BOT.yaml",
+        "id: one\nname: One\nsubagents: []\nskills: []\n",
+    )
+    summary = loader.reload()
+
+    assert summary["bots"]["added"] == ["one"]
+    assert [bot.id for bot in loader.discover().bots] == ["default", "one"]

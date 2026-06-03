@@ -78,6 +78,23 @@ def load_env_file(path: Path, *, override: bool = False) -> None:
             os.environ[key] = value
 
 
+def load_runtime_env_files(root: Path) -> list[Path]:
+    """Load local runtime env files in the standard AgentWeave order."""
+    paths = [
+        root / ".env",
+        root / ".agentweave" / "runtime.env",
+        root / ".agentweave" / "text2sql.env",
+        root / ".agentweave" / "rag.env",
+    ]
+    loaded: list[Path] = []
+    for path in paths:
+        if not path.exists():
+            continue
+        load_env_file(path, override=False)
+        loaded.append(path)
+    return loaded
+
+
 def columns_from_rows(rows: list[dict[str, Any]]) -> list[str]:
     columns: list[str] = []
     seen: set[str] = set()

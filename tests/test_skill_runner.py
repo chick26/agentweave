@@ -69,8 +69,8 @@ def test_text2sql_worker_uses_sdk_runner_with_isolated_context(tmp_path, monkeyp
                 api_key="not-needed",
                 max_tokens=128,
             ),
-            "sql_worker": ModelProfile(
-                role="sql_worker",
+            "executor": ModelProfile(
+                role="executor",
                 base_url="http://example.test/v1",
                 model_name="sql",
                 api_key="not-needed",
@@ -97,7 +97,10 @@ def test_text2sql_worker_uses_sdk_runner_with_isolated_context(tmp_path, monkeyp
     assert isinstance(captured["agent"].model, LoggingOpenAIChatCompletionsModel)
     assert {tool.name for tool in captured["agent"].tools} == {
         "get_current_time",
-        "plan_sql_query",
+        "list_domains",
+        "get_domain_schema",
+        "search_domain_values",
+        "generate_readonly_sql",
         "execute_sql",
     }
     assert [
@@ -115,11 +118,12 @@ def test_tool_registry_enable_disable(monkeypatch):
     runner = SubagentRunner(registry=registry, root=Path("."))
     manifest = registry.get("text2sql")
 
-    assert manifest.execution.tool_module == "subagents.text2sql.tools"
-    assert manifest.execution.context_module == "subagents.text2sql.domain_registry"
     assert {tool.name for tool in runner._build_subagent_tools(manifest)} == {
         "get_current_time",
-        "plan_sql_query",
+        "list_domains",
+        "get_domain_schema",
+        "search_domain_values",
+        "generate_readonly_sql",
         "execute_sql",
     }
 
@@ -128,34 +132,33 @@ def test_tool_registry_enable_disable(monkeypatch):
     assert runner._build_subagent_tools(manifest) == []
 
 
-def test_worker_subagent_can_load_tools_from_manifest_without_code_registration(tmp_path, monkeypatch):
-    tools_module = tmp_path / "fake_subagent_tools.py"
-    tools_module.write_text(
+def test_worker_subagent_loads_convention_tools_without_code_registration(tmp_path, monkeypatch):
+    subagents_root = tmp_path / "subagents"
+    (subagents_root / "__init__.py").parent.mkdir(parents=True, exist_ok=True)
+    (subagents_root / "__init__.py").write_text("", encoding="utf-8")
+    subagent_dir = subagents_root / "fake_worker"
+    subagent_dir.mkdir(parents=True)
+    (subagent_dir / "__init__.py").write_text("", encoding="utf-8")
+    (subagent_dir / "tools.py").write_text(
         "from agents import function_tool\n\n"
         "@function_tool\n"
         "async def echo_tool(value: str) -> str:\n"
         "    return value\n",
         encoding="utf-8",
     )
-    subagents_root = tmp_path / "subagents"
-    subagent_dir = subagents_root / "fake_worker"
-    subagent_dir.mkdir(parents=True)
-    (subagent_dir / "AGENT.md").write_text(
-        "---\n"
+    (subagent_dir / "AGENT.yaml").write_text(
         "name: fake_worker\n"
         "description: Fake worker subagent.\n"
         "execution:\n"
         "  mode: worker\n"
         "  model_role: orchestrator\n"
-        "  tool_module: fake_subagent_tools\n"
         "  max_turns: 3\n"
         "  timeout_seconds: 7.5\n"
         "tools:\n"
-        "  - echo_tool\n"
-        "---\n"
-        "Fake worker prompt.\n",
+        "  - echo_tool\n",
         encoding="utf-8",
     )
+    (subagent_dir / "prompt.md").write_text("Fake worker prompt.\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
 
     registry = AgentRegistry(subagents_root=subagents_root)
@@ -185,65 +188,60 @@ def test_generic_subagent_env_model_role_override(monkeypatch):
     runner = SubagentRunner(registry=registry, root=Path("."))
     manifest = registry.get("text2sql")
 
-    monkeypatch.setenv("TEXT2SQL_WORKER_MODEL_ROLE", "sql_worker")
-    assert runner._resolve_model_role(manifest) == "sql_worker"
-
-    monkeypatch.setenv("SUBAGENT_TEXT2SQL_MODEL_ROLE", "orchestrator")
     assert runner._resolve_model_role(manifest) == "orchestrator"
 
+    monkeypatch.setenv("SUBAGENT_TEXT2SQL_MODEL_ROLE", "executor")
+    assert runner._resolve_model_role(manifest) == "executor"
 
-def test_missing_tool_module_for_declared_tools_raises_clear_error(tmp_path):
+
+def test_missing_convention_tools_for_declared_tools_raises_clear_error(tmp_path):
     subagents_root = tmp_path / "subagents"
     subagent_dir = subagents_root / "broken_worker"
     subagent_dir.mkdir(parents=True)
-    (subagent_dir / "AGENT.md").write_text(
-        "---\n"
+    (subagent_dir / "AGENT.yaml").write_text(
         "name: broken_worker\n"
         "description: Broken worker subagent.\n"
         "execution:\n"
         "  mode: worker\n"
         "  model_role: orchestrator\n"
         "tools:\n"
-        "  - missing_tool\n"
-        "---\n"
-        "Broken worker prompt.\n",
+        "  - missing_tool\n",
         encoding="utf-8",
     )
+    (subagent_dir / "prompt.md").write_text("Broken worker prompt.\n", encoding="utf-8")
 
     registry = AgentRegistry(subagents_root=subagents_root)
-    runner = SubagentRunner(registry=registry, root=tmp_path)
 
-    with pytest.raises(ValueError, match="execution.tool_module is missing"):
-        runner._build_subagent_tools(registry.get("broken_worker"))
+    with pytest.raises(ValueError, match="tools.py is missing"):
+        registry.discover()
 
 
 def test_declared_missing_tool_raises_clear_error(tmp_path, monkeypatch):
-    tools_module = tmp_path / "partial_tools.py"
-    tools_module.write_text(
+    subagents_root = tmp_path / "subagents"
+    (subagents_root / "__init__.py").parent.mkdir(parents=True, exist_ok=True)
+    (subagents_root / "__init__.py").write_text("", encoding="utf-8")
+    subagent_dir = subagents_root / "broken_worker"
+    subagent_dir.mkdir(parents=True)
+    (subagent_dir / "__init__.py").write_text("", encoding="utf-8")
+    (subagent_dir / "tools.py").write_text(
         "from agents import function_tool\n\n"
         "@function_tool\n"
         "async def existing_tool(value: str) -> str:\n"
         "    return value\n",
         encoding="utf-8",
     )
-    subagents_root = tmp_path / "subagents"
-    subagent_dir = subagents_root / "broken_worker"
-    subagent_dir.mkdir(parents=True)
-    (subagent_dir / "AGENT.md").write_text(
-        "---\n"
+    (subagent_dir / "AGENT.yaml").write_text(
         "name: broken_worker\n"
         "description: Broken worker subagent.\n"
         "execution:\n"
         "  mode: worker\n"
         "  model_role: orchestrator\n"
-        "  tool_module: partial_tools\n"
         "tools:\n"
         "  - existing_tool\n"
-        "  - missing_tool\n"
-        "---\n"
-        "Broken worker prompt.\n",
+        "  - missing_tool\n",
         encoding="utf-8",
     )
+    (subagent_dir / "prompt.md").write_text("Broken worker prompt.\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
 
     registry = AgentRegistry(subagents_root=subagents_root)
@@ -366,8 +364,8 @@ def test_text2sql_worker_timeout_returns_latest_execute_result(tmp_path, monkeyp
                 api_key="not-needed",
                 max_tokens=128,
             ),
-            "sql_worker": ModelProfile(
-                role="sql_worker",
+            "executor": ModelProfile(
+                role="executor",
                 base_url="http://example.test/v1",
                 model_name="sql",
                 api_key="not-needed",

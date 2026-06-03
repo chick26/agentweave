@@ -18,7 +18,7 @@ sequenceDiagram
     participant Store as Result Store
 
     User->>Orchestrator: 提出结构化数据或专业任务请求
-    Note over Orchestrator: AgentRegistry 扫描 subagents/*/AGENT.md<br/>SkillRegistry 扫描 skills/*/SKILL.md<br/>二者语义分离
+    Note over Orchestrator: AgentRegistry 扫描 subagents/*/AGENT.yaml + prompt.md<br/>SkillRegistry 扫描 skills/*/SKILL.md<br/>BotRegistry 扫描 bots/*/BOT.yaml
     Orchestrator->>AgentTool: text2sql(task="...")
     activate AgentTool
     AgentTool->>Runner: 通过隔离执行桥启动 worker
@@ -27,11 +27,11 @@ sequenceDiagram
     Runner->>Worker: 启动 Worker 实例
     activate Worker
 
-    Worker->>Worker: plan_sql_query(domain="idc_resources") 规划 SQL
-    Worker->>DB: 内部装载 Domain、Schema 并做值链接
+    Worker->>DB: get_domain_schema(domain="idc_resources") 装载真实 Schema
+    Worker->>DB: search_domain_values() 做值链接
     DB-->>Worker: 返回真实候选值
-    Worker->>Worker: 内部构建事实型 SQLPlan 并生成只读 SQL
-    Worker->>DB: execute_sql() 执行只读 SQL 语句
+    Worker->>Worker: generate_readonly_sql() 生成只读 SQL
+    Worker->>DB: execute_sql(domain, sql) 执行只读 SQL 语句
     DB-->>Worker: 返回原始数据结果
     Worker->>Store: 将上限内结果写入本地 SQLite (agent_results.sqlite)
     Store-->>Worker: 返回对应的唯一 result_id
@@ -49,7 +49,7 @@ sequenceDiagram
 本架构采用 **Orchestrator（主编排器） + Ephemeral Worker（隔离子智能体）** 双层设计，具体执行流如下：
 
 1. **注册与感知阶段（Registry Discovery）**：
-   * `AgentRegistry` 只扫描 `subagents/*/AGENT.md`，解析可委派 subagent（如 `text2sql`）。
+   * `AgentRegistry` 只扫描符合固定格式的 `subagents/*/AGENT.yaml + prompt.md`，解析可委派 subagent（如 `text2sql`、`rag`）。
    * `SkillRegistry` 只扫描 `skills/*/SKILL.md`，解析可加载 skill 方法卡（如 `data_analysis`）。
    * Orchestrator 只把 worker subagent 注入 `<subagents_routing>` 并暴露成同名 agent tool；skill 只进入 `<skills_catalog>`，需要时通过 `load_skill` 读取。
 
@@ -60,8 +60,8 @@ sequenceDiagram
 
 3. **沙箱隔离执行阶段（Subagent Execution）**：
    * SDK agent tool 进入执行桥后，`SubagentRunner` 在隔离内存的 `SQLiteSession` 与 `RunContext` 下动态实例化一个 Worker Subagent。
-   * Worker 根据 `AGENT.md` 设定的专家行为规范，默认只调用高层工具（`plan_sql_query` -> `execute_sql`）完成数据查询；Domain 激活、Schema 装载、值链接、事实型 SQLPlan 和 SQL 生成在后端脚本中完成并保留 trace。
-   * **值链接**：对于用户输入中拼写不精确的实体，`plan_sql_query` 会在内部查询数据库真实值候选，帮助 SQL 模型生成更 grounded 的 SQL。
+   * Worker 根据 `prompt.md` 设定的专家行为规范，只调用自己声明的局部 tools。Text2SQL 的 Domain 选择、Schema 装载、值链接和 SQL 生成在 Text2SQL 包内完成；RAG 的 PDF 解析、临时向量索引和检索也在 RAG 包内完成。
+   * **值链接**：对于用户输入中拼写不精确的实体，`search_domain_values` 会查询数据库真实值候选，帮助 SQL 模型生成更 grounded 的 SQL。
    * **异常重试**：如 SQL 执行报错，Worker 会结合报错信息重新生成并执行最多一次。
 
 4. **结果持久化与展现阶段（Result Persistence & UI）**：
@@ -72,11 +72,11 @@ sequenceDiagram
 ## 运行时机制与扩展
 
 ### 1. Worker 运行模式（Execution Modes）
-在 subagent 配置文件 `AGENT.md` 中，可以通过 `execution.mode` 配置运行时的载入行为：
+在 subagent 配置文件 `AGENT.yaml` 中，可以通过 `execution.mode` 配置运行时的载入行为：
 *   **Worker 模式 (Subagent Mode)**:
     *   **配置值**: `mode: worker`
     *   **行为**: subagent 运行在完全独立的沙箱容器（`SQLiteSession`）中，作为一个自治的 Worker Agent 运行多步推理逻辑。主编排器（Orchestrator）通过 SDK agent-as-tool 风格的同名工具进行委派，Worker 内部调用自己局部的 Tools 完成工作后返回统一格式的 JSON 结果。
-    *   **接入方式**: 通过 `AGENT.md` 的 `execution.tool_module`、`execution.context_module`、`execution.model_role` 声明运行时模块；无需改 Orchestrator 或注册表常量。
+    *   **接入方式**: 固定按目录约定加载 `tools.py` 和可选 `context.py`；不允许通过 manifest 覆盖 Python module path。`runtime_env` 只声明本地测试环境入口，框架不直接启动数据库或向量库。
     *   **适用场景**: 需要大模型进行复杂的垂直推理、多步骤操作、容错纠错的场景（如 SQL 纠错、网页深度爬取等）。
 
 ### 2. Skill 方法卡（Skills）
@@ -96,16 +96,17 @@ sequenceDiagram
     *   通过 `update_todo` 工具动态更新，仅在当前会话生命周期内有效（不持久化）。编排器用其来做多步骤规划与自我进度追踪。
 
 ### 4. 钩子机制（Hooks）
-框架支持事件驱动的钩子扩展（`HookRunner`），目前已启用的核心钩子为：
-*   **`SessionStart` 钩子**:
-    *   **触发时机**: 新会话首次启动时。
-    *   **行为**: 动态分析当前已加载的数据域（Domains），调用 LLM 针对性地生成包含业务特征的“首页预设样本问题”（Preset Questions），并整合项目历史记忆，呈现高度定制化的欢迎消息。
+框架支持事件驱动的钩子扩展（`HookRunner`）。核心结构是“事件名 -> 一组处理函数”，当前支持：
+*   **`SessionStart`**：新会话启动时聚合欢迎消息和 preset questions。具体欢迎页内容由 Bot 的 `BOT.yaml` 中 `welcome` 配置决定；未配置 preset 的 Bot 只展示能力摘要。
+*   **`PreToolUse` / `PostToolUse`**：每次工具或 subagent tool 调用前后触发，可用于只读校验、审计、阻止调用或向模型返回 hook 注入信息。
 
 ## 已接入的能力
 
 | 类型 | 名称 | 说明 |
 |------|------|------|
+| bot | `data_analyst` | 挂载 `text2sql`、`rag` 与 `data_analysis` 的数据分析机器人 |
 | subagent | `text2sql` | 使用自然语言查询结构化数据 |
+| subagent | `rag` | 基于本地 PDF 知识库检索并返回来源片段 |
 | skill | `data_analysis` | 数据画像、质量检查、异常发现、图表建议的方法卡 |
 
 ## 详细文档
@@ -121,11 +122,12 @@ text2sql/
 │   ├── common.py                  # 通用 helper：时间、XML、frontmatter、identifier 等
 │   ├── core/
 │   │   ├── orchestrator.py        # 主 Orchestrator runtime
-│   │   ├── skill_runner.py        # SubagentRunner worker 生命周期
+│   │   ├── subagent_runner.py     # SubagentRunner worker 生命周期
+│   │   ├── skill_runner.py        # 兼容旧导入的 shim
 │   │   ├── context.py             # BaseContext / OrchestratorContext / RunContext
 │   │   ├── events.py              # RuntimeEvent / EventBus
-│   │   ├── hooks.py               # SessionStart hook runner / handlers
-│   │   ├── preset_questions.py    # 首页预设问题生成
+│   │   ├── hooks.py               # SessionStart/PreToolUse/PostToolUse hook runner
+│   │   ├── preset_questions.py    # 通用 welcome provider 聚合
 │   │   ├── result_events.py       # 从事件流提取 ResultStore metadata
 │   │   ├── compressor.py          # 上下文压缩与 hard trim
 │   │   ├── model_profiles.py      # 模型角色配置
@@ -137,22 +139,34 @@ text2sql/
 │   ├── server/                    # HTTP/SSE backend API
 │   └── ui/streamlit/              # Streamlit rendering and session actions
 ├── subagents/
-│   └── text2sql/
-│       ├── AGENT.md               # subagent manifest frontmatter + worker prompt body
-│       ├── tools.py               # Text2SQL subagent-local tools
-│       ├── planning.py            # SQLPlan / schema selection / validation helpers
-│       ├── domain_registry.py     # Text2SQL domain metadata loader
-│       ├── prompts.py             # Text2SQL internal prompts
-│       └── domains/               # Text2SQL table/domain configs
-│           ├── idc_resources/DOMAIN.md
-│           └── sea_cable_faults/DOMAIN.md
+│   ├── text2sql/
+│   │   ├── AGENT.yaml             # subagent 能力元数据、tools/data/runtime_env 声明
+│   │   ├── prompt.md              # worker prompt 模板
+│   │   ├── env.py                 # Text2SQL 本地测试 DB 准备入口
+│   │   ├── ENVIRONMENT.md         # Text2SQL 本地/生产环境启动说明
+│   │   ├── context.py             # 可选 prompt context provider
+│   │   ├── tools.py               # Text2SQL subagent-local tools
+│   │   ├── data/                  # Text2SQL 私有本地 CSV 测试数据
+│   │   ├── domain_catalog.yaml    # Text2SQL table/domain catalog
+│   │   └── scripts/               # domain catalog / SQL generation / env scripts
+│   └── rag/
+│       ├── AGENT.yaml             # RAG 能力元数据、PDF data/runtime_env 声明
+│       ├── prompt.md              # RAG worker prompt 模板
+│       ├── env.py                 # 本地 PDF 知识库检索入口
+│       ├── ENVIRONMENT.md         # RAG embedding/PDF 本地环境启动说明
+│       ├── tools.py               # RAG subagent-local tools
+│       ├── data/                  # RAG 私有本地 PDF 测试数据
+│       └── scripts/               # PDF loader / retrieval / local test scripts
+├── bots/
+│   └── data_analyst/
+│       └── BOT.yaml               # 后端 Bot 配置：挂载能力与 preset questions
 ├── skills/
 │   └── data_analysis/
 │       └── SKILL.md               # loadable data-analysis method card
 ├── docs/
 │   └── architecture/              # 当前架构说明
 └── data/
-    └── README.md                  # 本地私有数据目录，真实数据不提交
+    └── README.md                  # 全局临时数据目录
 ```
 
 ## 新增 Subagent
@@ -160,30 +174,50 @@ text2sql/
 新增通用 subagent：
 
 1. 在 `subagents/` 下创建新目录，例如 `subagents/my_agent/`。
-2. 创建 `AGENT.md`，用 YAML frontmatter 声明 `name`、`description`、`execution`、`tools`、`memory` 和 `routing_hints`，markdown body 作为 worker prompt 模板。
-3. 在 subagent 目录中实现 tools 模块，并通过 `execution.tool_module` 指向该 Python 模块；如果 prompt 需要动态上下文，通过 `execution.context_module` 暴露 `build_prompt_context(manifest)`。
-4. 可通过环境变量关闭某个 subagent 的 tools，例如 `SUBAGENT_TEXT2SQL_ENABLED=0`。
+2. 创建 `AGENT.yaml`，声明 `name`、`description`、`execution`、`tools`、`memory`、`data`、可选 `runtime_env` 和 `routing_hints`。
+3. 创建 `prompt.md`，作为 worker prompt 模板。
+4. 在 subagent 目录中实现 `tools.py`；runner 只从该目录加载这个固定文件。如果 prompt 需要动态上下文，可新增 `context.py` 并暴露 `build_prompt_context(manifest)`。
+5. 如果需要本地测试环境，必须提供 `ENVIRONMENT.md`，可新增 `env.py`、`data/` 和 `scripts/`。框架只把 `root`、`manifest`、`RunContext` 交给 tools/env，不理解 SQL、PDF、向量库等业务细节。
+6. 可通过环境变量关闭某个 subagent 的 tools，例如 `SUBAGENT_TEXT2SQL_ENABLED=0`。
+
+新增 subagent 只要符合这个 contract，不需要给框架新增专属测试；registry 启动时会校验目录形状。不符合格式就直接报配置错误。
+
+推荐目录结构：
+
+```text
+subagents/<name>/
+├── AGENT.yaml
+├── prompt.md
+├── tools.py
+├── ENVIRONMENT.md    # 有 runtime_env 时必需
+├── env.py            # 可选，本地测试环境入口
+├── data/             # 可选，本 subagent 私有测试数据
+└── scripts/          # 可选，业务实现脚本
+```
 
 最小 worker subagent manifest 示例：
 
 ```yaml
----
 name: my_agent
 description: 处理某类专业任务。
 execution:
   mode: worker
   model_role: orchestrator
-  tool_module: subagents.my_agent.tools
-  context_module: subagents.my_agent.context
   max_turns: 8
   timeout_seconds: 60
+runtime_env:
+  kind: local
+  setup_module: subagents.my_agent.env
+  mode: lazy
 tools:
   - first_tool
+data:
+  roots:
+    - subagents/my_agent/data
+  globs:
+    - "*.json"
 routing_hints:
   - 何时路由到这个 subagent
----
-
-你是 my_agent subagent。只完成 Orchestrator 交给你的 task，并返回结构化结果。
 ```
 
 ## 新增 Skill
@@ -215,37 +249,29 @@ activation_hints:
 
 新增 Text2SQL domain，也就是给 Text2SQL subagent 增加一个可查询 SQL 表：
 
-1. 在 `subagents/text2sql/domains/` 下创建新目录，例如 `subagents/text2sql/domains/my_new_domain/`
-2. 创建 `DOMAIN.md`，定义 YAML frontmatter：
+1. 在 `subagents/text2sql/domain_catalog.yaml` 的 `domains` 列表中新增一项：
 
 ```yaml
----
-name: my_new_domain
-description: 回答关于 XXX 的数据问题。
-table: my_table
-text_fields:
-  - field_a
-  - field_b
-field_descriptions:
-  field_a: 字段 A 的中文描述
-  field_b: 字段 B 的中文描述
----
-
-# My New Domain
-
-## Workflow
-1. ...
+domains:
+  - name: my_new_domain
+    description: 回答关于 XXX 的数据问题。
+    table: my_table
+    text_fields:
+      - field_a
+      - field_b
+    field_descriptions:
+      field_a: 字段 A 的中文描述
+      field_b: 字段 B 的中文描述
+    notes: |
+      这里写业务口径、过滤规则和值链接提示。
 ```
 
-3. 准备对应数据表。
-4. 如果使用 CSV demo 后端，通过 `TEXT2SQL_TABLES_JSON` 添加表名到 CSV 文件的映射。
+2. 在 `subagents/text2sql/AGENT.yaml` 的 `data.tables` 中添加表名到 CSV 文件的映射。
+3. 将本地测试 CSV 放到 `subagents/text2sql/data/`。
+4. 重新准备本地 SQLite：
 
 ```bash
-export TEXT2SQL_TABLES_JSON='{
-  "resources": "data/resources.csv",
-  "sea_cable_faults": "data/sea_cable_faults.csv",
-  "my_table": "data/my_data.csv"
-}'
+uv run agentweave-prepare-text2sql --overwrite
 ```
 
 ## 启动
@@ -254,35 +280,35 @@ export TEXT2SQL_TABLES_JSON='{
 
 ```bash
 uv sync
+cp .env.example .env
+uv run agentweave-prepare-text2sql --overwrite
 uv run streamlit run app.py
-```
-
-如果本地没有 `uv`，也可以使用项目虚拟环境：
-
-```bash
-./.venv/bin/streamlit run app.py
 ```
 
 FastAPI HTTP/SSE 后端服务：
 
 ```bash
-export AGENTWEAVE_SERVER_TOKEN=dev-token
-uv run python -m agent_runtime.server
+uv run agentweave-server
 ```
 
-默认监听 `127.0.0.1:8765`。跨设备访问时设置 `AGENTWEAVE_SERVER_HOST=0.0.0.0`，并保留 Bearer Token 鉴权。
+默认监听 `127.0.0.1:8765`。跨设备访问时在 `.env` 中设置 `AGENTWEAVE_SERVER_HOST=0.0.0.0`，并保留 `AGENTWEAVE_SERVER_TOKEN` 鉴权。
 
 ## 数据后端配置
 
-默认使用 CSV 后端，会把 `TEXT2SQL_TABLES_JSON` 配置的本地 CSV 文件加载进内存 SQLite，并自动推断字段类型。真实数据文件不进入 Git；可参考 `.env.example` 配置自己的表映射。
-
-也可以通过环境变量连接 SQLite 数据库文件：
+Text2SQL 数据库访问是严格前置流程：runtime 不自动加载 CSV、不自动建库。先运行：
 
 ```bash
-export TEXT2SQL_BACKEND=sqlite
-export TEXT2SQL_DATABASE_URL='sqlite:////absolute/path/to/database.db'
-uv run streamlit run app.py
+uv run agentweave-prepare-text2sql --overwrite
 ```
+
+该命令会读取 `subagents/text2sql/AGENT.yaml` 的 `data.tables` 映射，把 `subagents/text2sql/data/` 下的本地 CSV 构建为 `.agentweave/text2sql.sqlite`，并生成 `.agentweave/text2sql.env`：
+
+```bash
+TEXT2SQL_BACKEND=sqlite
+TEXT2SQL_DATABASE_URL=sqlite:////absolute/path/to/.agentweave/text2sql.sqlite
+```
+
+启动 Streamlit 或 FastAPI 时会自动加载 `.env` 和 `.agentweave/text2sql.env`。如果要连接真实只读 SQLite 数据库，直接编辑 `.agentweave/text2sql.env` 即可。
 
 后端统一执行只读 SQL：仅允许单条 `SELECT` 或只读 `WITH` 查询，禁止写入、DDL、`PRAGMA`、`ATTACH` 等危险语句。
 
@@ -334,24 +360,24 @@ sqlite3 .streamlit_agent_sessions.sqlite \
 
 | 角色 | 环境变量 | 默认值 |
 |------|----------|--------|
-| Orchestrator | `QWEN36_BASE_URL` / `QWEN36_MODEL` | `http://localhost:8000/v1` / `openai-compatible-chat-model` |
+| Orchestrator | `QWEN36_BASE_URL` / `QWEN36_MODEL` | `http://localhost:8000/v1` / `qwen3.6-27b` |
 | Orchestrator context window | `QWEN36_CONTEXT_WINDOW` | `32768` |
-| Worker subagent 编排 | `SUBAGENT_<NAME>_MODEL_ROLE` | `execution.model_role` |
-| Text2SQL worker 编排 | `TEXT2SQL_WORKER_MODEL_ROLE` | `orchestrator` |
-| SQL 生成 / 上下文压缩 | `QWEN32_BASE_URL` / `QWEN32_MODEL` | `http://localhost:8001/v1` / `openai-compatible-sql-model` |
-| SQL/context window | `QWEN32_CONTEXT_WINDOW` | `32768` |
+| Worker subagent 编排 | `SUBAGENT_<NAME>_MODEL_ROLE` | 默认 `orchestrator` |
+| 执行类模型 | `EXECUTOR_BASE_URL` / `EXECUTOR_MODEL` | `http://localhost:8001/v1` / `qwen3-32b` |
+| Executor context window | `EXECUTOR_CONTEXT_WINDOW` | `32768` |
 | Memory embedding | `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` | `http://localhost:8002/v1` / `openai-compatible-embedding-model` |
-| Vision 预留 | `QWEN_VL_BASE_URL` / `QWEN_VL_MODEL` | `http://localhost:8003/v1` / `openai-compatible-vision-model` |
 
 其他运行时配置：
 
-```bash
-export WORKER_MAX_TURNS=15
-export SUBAGENT_TEXT2SQL_MAX_TURNS=15
-export SUBAGENT_TEXT2SQL_TIMEOUT_SECONDS=120
-export OPENAI_CLIENT_TIMEOUT=60
-export OPENAI_CLIENT_MAX_RETRIES=2
-export MEMORY_ENABLED=1
-export MEMORY_EMBEDDING_ENABLED=1
-export TEXT2SQL_TIMEZONE='Asia/Hong_Kong'
+```dotenv
+WORKER_MAX_TURNS=15
+SUBAGENT_TEXT2SQL_MAX_TURNS=15
+SUBAGENT_TEXT2SQL_TIMEOUT_SECONDS=120
+OPENAI_CLIENT_TIMEOUT=60
+OPENAI_CLIENT_MAX_RETRIES=2
+MEMORY_ENABLED=1
+MEMORY_EMBEDDING_ENABLED=1
+TEXT2SQL_TIMEZONE=Asia/Hong_Kong
 ```
+
+这些变量写入 `.env` 或 `.agentweave/runtime.env` 即可；启动时会自动加载。

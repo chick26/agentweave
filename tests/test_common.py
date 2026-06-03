@@ -1,6 +1,9 @@
+import os
+
 from agent_runtime.common import (
     coerce_bool,
     columns_from_rows,
+    load_runtime_env_files,
     quote_identifier,
     split_frontmatter,
     utc_now_iso,
@@ -36,3 +39,21 @@ def test_quote_identifier_rejects_unsafe_names():
 def test_split_frontmatter_rejects_invalid_yaml():
     with pytest.raises(ValueError, match="Invalid YAML frontmatter"):
         split_frontmatter("---\nname: [broken\n---\nBody")
+
+
+def test_load_runtime_env_files_uses_standard_local_files(tmp_path, monkeypatch):
+    monkeypatch.delenv("AGENTWEAVE_TEST_VALUE", raising=False)
+    (tmp_path / ".env").write_text("AGENTWEAVE_TEST_VALUE=from-dot-env\n", encoding="utf-8")
+    env_dir = tmp_path / ".agentweave"
+    env_dir.mkdir()
+    (env_dir / "text2sql.env").write_text(
+        "TEXT2SQL_BACKEND=sqlite\n"
+        "TEXT2SQL_DATABASE_URL=sqlite:////tmp/text2sql.sqlite\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_runtime_env_files(tmp_path)
+
+    assert [path.name for path in loaded] == [".env", "text2sql.env"]
+    assert os.environ["AGENTWEAVE_TEST_VALUE"] == "from-dot-env"
+    assert os.environ["TEXT2SQL_BACKEND"] == "sqlite"

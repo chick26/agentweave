@@ -30,13 +30,31 @@ def test_server_accepts_authorized_session_request(tmp_path: Path) -> None:
 
     response = client.post(
         "/sessions",
-        json={"session_id": "web-test"},
+        json={"session_id": "web-test", "bot_id": "data_analyst"},
         headers={"Authorization": "Bearer secret"},
     )
 
     assert response.status_code == 200
     assert response.json()["session_id"] == "web-test"
-    assert response.json()["message"] == "welcome:web-test"
+    assert response.json()["bot_id"] == "data_analyst"
+    assert response.json()["message"] == "welcome:web-test:data_analyst"
+
+
+def test_server_exposes_capabilities_and_bots(tmp_path: Path) -> None:
+    app = create_app(host="127.0.0.1", token="secret", service=_service(tmp_path))
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret"}
+
+    capabilities = client.get("/capabilities", headers=headers)
+    bots = client.get("/bots", headers=headers)
+    bot = client.get("/bots/data_analyst", headers=headers)
+
+    assert capabilities.status_code == 200
+    assert capabilities.json()["subagents"][0]["name"] == "text2sql"
+    assert bots.status_code == 200
+    assert [item["id"] for item in bots.json()] == ["default", "data_analyst"]
+    assert bot.status_code == 200
+    assert bot.json()["name"] == "数据分析机器人"
 
 
 def test_server_streams_sse_events(tmp_path: Path) -> None:

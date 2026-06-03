@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
+import importlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from openai import OpenAI
-
-from agent_runtime.registry.skill_registry import AgentRegistry
-from subagents.text2sql.domain_registry import Text2SQLDomainRegistry
+from agent_runtime.registry.skill_registry import AgentManifest, AgentRegistry
 
 
 @dataclass(frozen=True)
@@ -35,6 +34,10 @@ def generate_preset_question_groups(
     model_name: str,
     api_key: str,
     questions_per_domain: int = 2,
+    subagent_names: list[str] | None = None,
+    welcome_mode: str = "providers",
+    welcome_provider_module: str = "",
+    preset_question_groups: list[dict[str, Any]] | None = None,
 ) -> list[PresetQuestionGroup]:
     return generate_preset_question_result(
         skills_root=skills_root,
@@ -43,6 +46,10 @@ def generate_preset_question_groups(
         model_name=model_name,
         api_key=api_key,
         questions_per_domain=questions_per_domain,
+        subagent_names=subagent_names,
+        welcome_mode=welcome_mode,
+        welcome_provider_module=welcome_provider_module,
+        preset_question_groups=preset_question_groups,
     ).groups
 
 
@@ -54,64 +61,83 @@ def generate_preset_question_result(
     model_name: str,
     api_key: str,
     questions_per_domain: int = 2,
+    subagent_names: list[str] | None = None,
+    welcome_mode: str = "providers",
+    welcome_provider_module: str = "",
+    preset_question_groups: list[dict[str, Any]] | None = None,
 ) -> PresetQuestionResult:
-    """Generate homepage preset questions from Text2SQL domain metadata."""
-    domains = _load_text2sql_domains(
-        skills_root=skills_root,
-        subagents_root=subagents_root,
-    )
-    if not domains:
-        return PresetQuestionResult(groups=[], source="empty", domains=[])
-    domain_summaries = _domain_summaries(domains)
-
-    raw_content = ""
+    """Generate homepage preset questions from bot welcome config."""
+    mode = (welcome_mode or "providers").strip().lower()
+    configured_groups = _coerce_question_groups(preset_question_groups or [])
+    root = skills_root or Path("skills")
+    agent_root = subagents_root or root.parent / "subagents"
     try:
-        client = OpenAI(base_url=base_url, api_key=api_key, timeout=8.0)
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "你是数据问答产品的示例问题生成器。"
-                        "根据每个 Text2SQL domain 的 YAML 元数据和说明，为每个 domain 生成简短、真实、"
-                        "用户会直接输入的中文问数问题。只输出 JSON。"
-                        "不要输出思考过程，不要输出 <think> 标签。"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": _build_generation_prompt(domains, questions_per_domain),
-                },
-            ],
-            temperature=0.2,
-            max_tokens=1024,
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-        )
-        raw_content = response.choices[0].message.content or ""
-        generated = _parse_question_groups(raw_content)
-        if generated:
-            return PresetQuestionResult(
-                groups=generated,
-                source="model",
-                raw_output=raw_content,
-                domains=domain_summaries,
-            )
-        return PresetQuestionResult(
-            groups=[],
-            source="fallback",
-            error="模型返回内容未解析出有效问题。",
-            raw_output=raw_content,
-            domains=domain_summaries,
-        )
+        manifests = AgentRegistry(subagents_root=agent_root).discover()
+        if subagent_names is not None:
+            allowed = set(subagent_names)
+            manifests = [manifest for manifest in manifests if manifest.name in allowed]
     except Exception as exc:
         return PresetQuestionResult(
             groups=[],
             source="fallback",
             error=f"{type(exc).__name__}: {exc}",
-            raw_output=raw_content,
-            domains=domain_summaries,
+            domains=[],
         )
+
+    groups: list[PresetQuestionGroup] = []
+    capabilities: list[dict[str, str]] = []
+    errors: list[str] = []
+    sources: list[str] = []
+    raw_outputs: list[str] = []
+
+    if configured_groups:
+        groups.extend(configured_groups)
+        sources.append("config")
+
+    if mode == "static":
+        capabilities = [_capability_summary(manifest) for manifest in manifests]
+        return PresetQuestionResult(
+            groups=groups,
+            source="config" if groups else _merge_sources([], groups, capabilities),
+            domains=capabilities,
+        )
+
+    provider_module = (welcome_provider_module or "").strip()
+    if provider_module:
+        try:
+            result = _run_provider(
+                provider_module=provider_module,
+                manifests=manifests,
+                base_url=base_url,
+                model_name=model_name,
+                api_key=api_key,
+                questions_per_domain=questions_per_domain,
+            )
+        except Exception as exc:
+            errors.append(f"{provider_module}: {type(exc).__name__}: {exc}")
+            capabilities.extend(_capability_summary(manifest) for manifest in manifests)
+        else:
+            groups.extend(result.groups)
+            capabilities.extend(
+                result.domains or [_capability_summary(manifest) for manifest in manifests]
+            )
+            if result.error:
+                errors.append(result.error)
+            if result.source:
+                sources.append(result.source)
+            if result.raw_output:
+                raw_outputs.append(result.raw_output)
+    else:
+        capabilities.extend(_capability_summary(manifest) for manifest in manifests)
+
+    source = _merge_sources(sources, groups, capabilities)
+    return PresetQuestionResult(
+        groups=groups,
+        source=source,
+        error="; ".join(errors),
+        raw_output="\n\n".join(raw_outputs),
+        domains=capabilities,
+    )
 
 
 def format_welcome_message(
@@ -119,9 +145,9 @@ def format_welcome_message(
     domains: list[dict[str, str]] | None = None,
 ) -> str:
     if not groups:
-        lines = ["你好，我可以回答已接入数据领域的问数问题。"]
+        lines = ["你好，我可以回答已接入能力范围内的问题。"]
         if domains:
-            lines.append("\n当前已接入的数据域：")
+            lines.append("\n当前已接入的数据域或能力：")
             for domain in domains:
                 description = domain.get("description") or domain.get("name") or ""
                 name = domain.get("name") or ""
@@ -131,7 +157,7 @@ def format_welcome_message(
                 lines.append(f"- {label}")
         return "\n".join(lines)
 
-    lines = ["你好，我可以回答已接入数据领域的问数问题。\n", "试试问我："]
+    lines = ["你好，我可以回答已接入能力范围内的问题。\n", "试试问我："]
     for group in groups:
         title = _short_title(group.title)
         lines.append(f"\n**{title}**")
@@ -140,18 +166,63 @@ def format_welcome_message(
     return "\n".join(lines)
 
 
-def _load_text2sql_domains(
+def _run_provider(
     *,
-    skills_root: Path | None,
-    subagents_root: Path | None = None,
-) -> list:
-    root = skills_root or Path("skills")
-    agent_root = subagents_root or root.parent / "subagents"
-    manifest = AgentRegistry(subagents_root=agent_root).get("text2sql")
-    return Text2SQLDomainRegistry.from_agent(manifest).list_domains()
+    provider_module: str,
+    manifests: list[AgentManifest],
+    base_url: str,
+    model_name: str,
+    api_key: str,
+    questions_per_domain: int,
+) -> PresetQuestionResult:
+    module = importlib.import_module(provider_module)
+    generator = getattr(module, "generate_preset_question_result", None)
+    if generator is None:
+        raise ValueError(
+            f"Welcome provider {provider_module} is missing generate_preset_question_result"
+        )
+    result = generator(
+        manifests=manifests,
+        manifest=manifests[0] if len(manifests) == 1 else None,
+        base_url=base_url,
+        model_name=model_name,
+        api_key=api_key,
+        questions_per_domain=questions_per_domain,
+    )
+    if isinstance(result, PresetQuestionResult):
+        return result
+    if isinstance(result, dict):
+        return PresetQuestionResult(
+            groups=_coerce_question_groups(result.get("groups", [])),
+            source=str(result.get("source") or "provider"),
+            error=str(result.get("error") or ""),
+            raw_output=str(result.get("raw_output") or ""),
+            domains=_coerce_dict_list(result.get("domains")),
+        )
+    raise TypeError(f"Welcome provider {provider_module} returned {type(result).__name__}")
 
 
-def _domain_summaries(domains: list) -> list[dict[str, str]]:
+def _capability_summary(manifest: AgentManifest) -> dict[str, str]:
+    return {"name": manifest.name, "description": manifest.description}
+
+
+def _merge_sources(
+    sources: list[str],
+    groups: list[PresetQuestionGroup],
+    capabilities: list[dict[str, str]],
+) -> str:
+    if any(source == "model" for source in sources):
+        return "model"
+    if any(source == "config" for source in sources):
+        return "config"
+    if groups:
+        return "provider"
+    if capabilities:
+        return "capabilities"
+    return "empty"
+
+
+def _domain_summaries(domains: list[Any]) -> list[dict[str, str]]:
     return [
         {
             "name": str(domain.name),
@@ -159,32 +230,6 @@ def _domain_summaries(domains: list) -> list[dict[str, str]]:
         }
         for domain in domains
     ]
-
-
-def _build_generation_prompt(domains: list, questions_per_domain: int) -> str:
-    payload = []
-    for domain in domains:
-        payload.append(
-            {
-                "name": domain.name,
-                "description": domain.description,
-                "table": domain.table,
-                "text_fields": domain.text_fields,
-                "field_descriptions": domain.field_descriptions,
-                "workflow_excerpt": domain.body[:1200],
-            }
-        )
-    return (
-        f"请为每个 Text2SQL domain 生成 {questions_per_domain} 个预设问题。\n"
-        "要求：\n"
-        "- 问题必须适合直接作为用户输入。\n"
-        "- 优先覆盖计数、排行、状态、时间/数值聚合等典型问数。\n"
-        "- 不要编造过细的字段值，除非字段描述里明确给了示例值。\n"
-        "- 输出严格 JSON，不要 Markdown，不要解释。\n"
-        "JSON 格式："
-        '{"domains":[{"domain_name":"...","title":"...","questions":["..."]}]}\n\n'
-        f"domains:\n{json.dumps(payload, ensure_ascii=False)}"
-    )
 
 
 def _parse_question_groups(content: str) -> list[PresetQuestionGroup]:
@@ -213,6 +258,47 @@ def _parse_question_groups(content: str) -> list[PresetQuestionGroup]:
                 )
             )
     return groups
+
+
+def _coerce_question_groups(value: Any) -> list[PresetQuestionGroup]:
+    if not isinstance(value, list):
+        return []
+    groups: list[PresetQuestionGroup] = []
+    for item in value:
+        if isinstance(item, PresetQuestionGroup):
+            groups.append(item)
+        elif isinstance(item, dict):
+            questions = [
+                _clean_question(question)
+                for question in item.get("questions", [])
+                if isinstance(question, str) and _clean_question(question)
+            ]
+            domain_name = str(item.get("domain_name") or item.get("name") or "").strip()
+            if domain_name and questions:
+                groups.append(
+                    PresetQuestionGroup(
+                        domain_name=domain_name,
+                        title=str(item.get("title") or domain_name),
+                        questions=questions,
+                    )
+                )
+    return groups
+
+
+def _coerce_dict_list(value: Any) -> list[dict[str, str]] | None:
+    if not isinstance(value, list):
+        return None
+    items: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        items.append(
+            {
+                "name": str(item.get("name") or ""),
+                "description": str(item.get("description") or ""),
+            }
+        )
+    return items
 
 
 def _extract_json_text(content: str) -> str:

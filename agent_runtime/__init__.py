@@ -7,6 +7,8 @@ from typing import Any
 __all__ = [
     "AgentRuntime",
     "AgentRegistry",
+    "BotConfig",
+    "BotRegistry",
     "CsvSQLiteBackend",
     "EventBus",
     "EventKind",
@@ -22,6 +24,8 @@ __all__ = [
 _LAZY_EXPORTS = {
     "AgentRuntime": ("agent_runtime.core.orchestrator", "AgentRuntime"),
     "AgentRegistry": ("agent_runtime.registry.skill_registry", "AgentRegistry"),
+    "BotConfig": ("agent_runtime.registry.bot_registry", "BotConfig"),
+    "BotRegistry": ("agent_runtime.registry.bot_registry", "BotRegistry"),
     "CsvSQLiteBackend": ("agent_runtime.storage.database", "CsvSQLiteBackend"),
     "EventBus": ("agent_runtime.core.events", "EventBus"),
     "EventKind": ("agent_runtime.core.events", "EventKind"),

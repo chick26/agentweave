@@ -16,7 +16,44 @@ class FakeRuntime:
         self.result_store = result_store
 
     def run_session_start_hook(self, **kwargs):
-        return SimpleNamespace(message=f"welcome:{kwargs['session_id']}")
+        return SimpleNamespace(message=f"welcome:{kwargs['session_id']}:{kwargs.get('bot_id', 'default')}")
+
+    def list_capabilities(self):
+        return {
+            "subagents": [{"name": "text2sql", "description": "Text2SQL", "routing_hints": []}],
+            "skills": [{"name": "data_analysis", "description": "Data analysis", "activation_hints": []}],
+        }
+
+    def list_bots(self):
+        return [
+            {
+                "id": "default",
+                "name": "Default Bot",
+                "description": "Default",
+                "subagents": ["text2sql"],
+                "skills": ["data_analysis"],
+                "generated": True,
+            },
+            {
+                "id": "data_analyst",
+                "name": "数据分析机器人",
+                "description": "Data analyst",
+                "subagents": ["text2sql"],
+                "skills": ["data_analysis"],
+                "generated": False,
+            },
+        ]
+
+    def get_bot(self, bot_id):
+        for bot in self.list_bots():
+            if bot["id"] == bot_id:
+                return {
+                    **bot,
+                    "instructions": "",
+                    "welcome": {"mode": "providers"},
+                    "resolved": {"subagents": [], "skills": []},
+                }
+        raise ValueError(f"Unknown bot: {bot_id}")
 
     async def ask(
         self,
@@ -25,6 +62,7 @@ class FakeRuntime:
         event_callback=None,
         model_delta_callback=None,
         max_turns=10,
+        bot_id="default",
     ):
         events = [
             {
@@ -72,13 +110,13 @@ class FakeRuntime:
                 }
             )
         return {
-            "final_output": f"answer:{question}",
+            "final_output": f"answer:{question}:{bot_id}",
             "events": events,
             "model_logs": [],
         }
 
     def reload_resources(self):
-        return {"skills": 1, "subagents": 1, "domains": 2}
+        return {"skills": 1, "subagents": 1, "bots": 2, "domains": 2}
 
 
 def _service(tmp_path: Path) -> AgentService:
@@ -105,10 +143,12 @@ def _service_with_limits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Age
 def test_service_creates_session_with_capabilities(tmp_path: Path) -> None:
     service = _service(tmp_path)
 
-    session = service.create_session(session_id="web-test")
+    session = service.create_session(session_id="web-test", bot_id="data_analyst")
 
     assert session["session_id"] == "web-test"
-    assert session["message"] == "welcome:web-test"
+    assert session["bot_id"] == "data_analyst"
+    assert session["bot"]["name"] == "数据分析机器人"
+    assert session["message"] == "welcome:web-test:data_analyst"
     assert session["capabilities"] == {
         "streaming": True,
         "results": True,
@@ -120,6 +160,7 @@ def test_service_creates_session_with_capabilities(tmp_path: Path) -> None:
 def test_service_run_streams_runtime_result_and_complete_events(tmp_path: Path) -> None:
     service = _service(tmp_path)
 
+    service.create_session(session_id="web-test", bot_id="data_analyst")
     created = service.create_run(session_id="web-test", message="查 403")
     events = list(service.iter_sse_events(created["run_id"]))
     run = service.get_run(created["run_id"])
@@ -142,7 +183,9 @@ def test_service_run_streams_runtime_result_and_complete_events(tmp_path: Path) 
         "答案",
     ]
     assert events[3]["payload"]["kind"] == "orchestration_model"
-    assert events[-1]["answer"] == "answer:查 403"
+    assert created["bot_id"] == "data_analyst"
+    assert events[-1]["bot_id"] == "data_analyst"
+    assert events[-1]["answer"] == "answer:查 403:data_analyst"
     assert run["status"] == "completed"
     assert run["result_ids"] == ["res_fake"]
     assert service.get_diagnostic(created["run_id"])["summary"]["event_count"] == 2
@@ -189,6 +232,15 @@ def test_service_reload_resources_returns_ui_event(tmp_path: Path) -> None:
     assert result["reloaded"] is True
     assert result["event"]["kind"] == "resources_reloaded"
     assert result["event"]["payload"]["summary"]["domains"] == 2
+    assert result["event"]["payload"]["summary"]["bots"] == 2
+
+
+def test_service_lists_capabilities_and_bots(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    assert service.list_capabilities()["subagents"][0]["name"] == "text2sql"
+    assert [bot["id"] for bot in service.list_bots()] == ["default", "data_analyst"]
+    assert service.get_bot("data_analyst")["name"] == "数据分析机器人"
 
 
 def test_service_prunes_completed_runs_by_max_cache_size(

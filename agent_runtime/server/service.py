@@ -13,7 +13,6 @@ from agent_runtime.common import utc_now_iso
 from agent_runtime.core.orchestrator import AgentRuntime
 from agent_runtime.core.result_events import extract_result_metadata
 from agent_runtime.core.runtime_utils import to_jsonable
-from agent_runtime.core.settings import load_database_backend
 from agent_runtime.storage.diagnostic_store import DiagnosticStore
 
 
@@ -41,13 +40,13 @@ class AgentServiceConfig:
         return cls(
             root=resolved_root,
             base_url=os.getenv("QWEN36_BASE_URL", "http://localhost:8000/v1"),
-            model_name=os.getenv("QWEN36_MODEL", "openai-compatible-chat-model"),
+            model_name=os.getenv("QWEN36_MODEL", "qwen3.6-27b"),
             api_key=os.getenv("OPENAI_API_KEY", "not-needed"),
             session_db_path=resolved_root / ".agentweave_server_sessions.sqlite",
             max_tokens=int(os.getenv("QWEN36_MAX_TOKENS", "8192")),
-            sql_base_url=os.getenv("QWEN32_BASE_URL") or None,
-            sql_model_name=os.getenv("QWEN32_MODEL") or None,
-            sql_max_tokens=int(os.getenv("QWEN32_MAX_TOKENS", "2048")),
+            sql_base_url=os.getenv("EXECUTOR_BASE_URL") or None,
+            sql_model_name=os.getenv("EXECUTOR_MODEL") or None,
+            sql_max_tokens=int(os.getenv("EXECUTOR_MAX_TOKENS", "2048")),
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL") or None,
             embedding_model_name=os.getenv("EMBEDDING_MODEL") or None,
             memory_enabled=_optional_bool(os.getenv("MEMORY_ENABLED")),
@@ -60,6 +59,7 @@ class RunRecord:
     run_id: str
     session_id: str
     question: str
+    bot_id: str = "default"
     status: str = "queued"
     answer: str = ""
     result_ids: list[str] = field(default_factory=list)
@@ -99,6 +99,7 @@ class AgentService:
         self.runtime = runtime or (runtime_factory or _build_runtime)(config)
         self.diagnostic_store = diagnostic_store or DiagnosticStore(config.session_db_path)
         self._runs: dict[str, RunRecord] = {}
+        self._sessions: dict[str, str] = {}
         self._lock = threading.RLock()
         self._max_runs = _env_int("AGENTWEAVE_RUN_CACHE_MAX", 1000)
         self._run_ttl_seconds = _env_float("AGENTWEAVE_RUN_CACHE_TTL_SECONDS", 6 * 60 * 60)
@@ -107,18 +108,30 @@ class AgentService:
         self,
         *,
         session_id: str = "",
+        bot_id: str = "default",
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         session_id = session_id.strip() if session_id else f"web-{uuid.uuid4().hex[:12]}"
+        resolved_bot_id = (bot_id or "default").strip() or "default"
+        bot = self.get_bot(resolved_bot_id)
         result = self.runtime.run_session_start_hook(
             session_id=session_id,
             base_url=self.config.sql_base_url or self.config.base_url,
             model_name=self.config.sql_model_name or self.config.model_name,
             api_key=self.config.api_key,
             questions_per_domain=self.config.questions_per_domain,
+            bot_id=resolved_bot_id,
         )
+        with self._lock:
+            self._sessions[session_id] = resolved_bot_id
         return {
             "session_id": session_id,
+            "bot_id": resolved_bot_id,
+            "bot": {
+                "id": bot["id"],
+                "name": bot["name"],
+                "description": bot.get("description", ""),
+            },
             "message": result.message,
             "capabilities": {
                 "streaming": True,
@@ -138,8 +151,14 @@ class AgentService:
     ) -> dict[str, Any]:
         if not message.strip():
             raise ValueError("message is required.")
+        bot_id = self._bot_id_for_session(session_id)
         run_id = f"run_{uuid.uuid4().hex[:16]}"
-        record = RunRecord(run_id=run_id, session_id=session_id, question=message)
+        record = RunRecord(
+            run_id=run_id,
+            session_id=session_id,
+            question=message,
+            bot_id=bot_id,
+        )
         with self._lock:
             self._prune_runs_locked()
             self._runs[run_id] = record
@@ -153,6 +172,7 @@ class AgentService:
         return {
             "run_id": run_id,
             "session_id": session_id,
+            "bot_id": bot_id,
             "status": "queued",
             "events_url": f"/runs/{run_id}/events",
         }
@@ -163,6 +183,7 @@ class AgentService:
             return {
                 "run_id": record.run_id,
                 "session_id": record.session_id,
+                "bot_id": record.bot_id,
                 "status": record.status,
                 "question": record.question,
                 "answer": record.answer,
@@ -253,6 +274,15 @@ class AgentService:
     def get_diagnostic(self, run_id: str) -> dict[str, Any]:
         return self.diagnostic_store.get_run(run_id)
 
+    def list_capabilities(self) -> dict[str, Any]:
+        return self.runtime.list_capabilities()
+
+    def list_bots(self) -> list[dict[str, Any]]:
+        return self.runtime.list_bots()
+
+    def get_bot(self, bot_id: str) -> dict[str, Any]:
+        return self.runtime.get_bot(bot_id or "default")
+
     def reload_resources(self, *, reason: str = "manual") -> dict[str, Any]:
         summary = self.runtime.reload_resources()
         message = " ".join(f"{key}={value}" for key, value in summary.items())
@@ -307,6 +337,7 @@ class AgentService:
                     event_callback=on_event,
                     model_delta_callback=on_model_delta,
                     max_turns=max_turns,
+                    bot_id=record.bot_id,
                 )
             )
             completed_at = utc_now_iso()
@@ -343,6 +374,7 @@ class AgentService:
                     "type": "run_complete",
                     "run_id": record.run_id,
                     "session_id": record.session_id,
+                    "bot_id": record.bot_id,
                     "timestamp": completed_at,
                     "answer": answer,
                     "result_ids": result_ids,
@@ -379,6 +411,7 @@ class AgentService:
                     "type": "run_error",
                     "run_id": record.run_id,
                     "session_id": record.session_id,
+                    "bot_id": record.bot_id,
                     "timestamp": completed_at,
                     "error": type(exc).__name__,
                     "message": error,
@@ -397,6 +430,14 @@ class AgentService:
         if record is None:
             raise KeyError(f"Unknown run_id: {run_id}")
         return record
+
+    def _bot_id_for_session(self, session_id: str) -> str:
+        with self._lock:
+            bot_id = self._sessions.get(session_id)
+            if bot_id is None:
+                bot_id = "default"
+                self._sessions[session_id] = bot_id
+        return bot_id
 
     def _prune_runs(self) -> None:
         with self._lock:
@@ -429,7 +470,6 @@ class AgentService:
 
 def _build_runtime(config: AgentServiceConfig) -> AgentRuntime:
     return AgentRuntime(
-        backend=load_database_backend(config.root),
         base_url=config.base_url,
         model_name=config.model_name,
         api_key=config.api_key,

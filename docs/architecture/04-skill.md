@@ -15,7 +15,7 @@
 
 | 维度 | Skill (方法卡) | Subagent (子智能体) |
 |------|---------------|-------------------|
-| **位置** | `skills/*/SKILL.md` | `subagents/*/AGENT.md` |
+| **位置** | `skills/*/SKILL.md` | `subagents/*/AGENT.yaml + prompt.md` |
 | **注册机制** | SkillRegistry | AgentRegistry |
 | **存在感** | 在 prompt 中注入 `<skills_catalog>` 摘要 | 在 prompt 中注入 `<subagents_routing>` 路由 |
 | **加载方式** | 通过 `load_skill("名称")` 主动去读取文件 | 作为同名 agent-tool 函数，直接传参数调用 |

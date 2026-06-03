@@ -14,7 +14,7 @@ output.
 - `agent_runtime.storage`: database backends, diagnostic persistence, and
   result storage.
 - `agent_runtime.registry`: manifest-driven discovery for skills, subagents,
-  domains, project rules, and reloadable resource snapshots.
+  bots, domains, project rules, and reloadable resource snapshots.
 - `agent_runtime.server`: HTTP/SSE API and application service layer for TUI
   and external TS Web clients.
 - `agent_runtime.ui.streamlit`: Streamlit rendering only. It consumes runtime
@@ -31,7 +31,7 @@ Internal code should use the layered paths directly, for example:
 ```python
 from agent_runtime.core.orchestrator import AgentRuntime
 from agent_runtime.core.context import RunContext
-from agent_runtime.core.skill_runner import SubagentRunner
+from agent_runtime.core.subagent_runner import SubagentRunner
 from agent_runtime.storage.database import CsvSQLiteBackend
 from agent_runtime.memory.memory_manager import MemoryManager
 from agent_runtime.registry.skill_registry import AgentRegistry
@@ -74,12 +74,27 @@ loads full pages from `ResultStore`.
 - project rules: `AGENT_PROJECT_RULES_PATH` override, then `AGENTS.md`, then
   `PROJECT.md`
 - skills: `skills/*/SKILL.md`
-- subagents: `subagents/*/AGENT.md`
+- subagents: strict `subagents/*/AGENT.yaml + prompt.md` packages
+- bots: `bots/*/BOT.yaml`
 - domains: `subagents/*/domains/*/DOMAIN.md`
 
 Streamlit exposes a `Reload Resources` action that invalidates registries,
 refreshes the resource snapshot, clears cached preset questions when needed,
 and records a `resources_reloaded` event for diagnostics.
+
+Bot configs select which global skills/subagents are visible for a session.
+The HTTP backend binds `bot_id` at session creation and scopes prompt sections,
+tools, skill loading, and welcome content to that Bot. Welcome/preset questions
+are optional Bot config, not subagent config.
+
+Subagents are convention-based capability packages. The runtime reads
+`AGENT.yaml` for metadata, `prompt.md` for the worker prompt, loads
+`subagents.<name>.tools` by default, and optionally reads
+`subagents.<name>.context`. `ENVIRONMENT.md` documents how to start or connect
+that subagent's local/production environment and is not injected into model
+context. `runtime_env` and `data` metadata are passed through to the subagent
+implementation; the core runtime does not interpret SQL schemas, PDF files,
+vector stores, or other domain-specific resources.
 
 ## Session Export
 

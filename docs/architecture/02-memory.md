@@ -104,7 +104,7 @@ def retrieve(self, query: str, namespaces: list[str], limit: int = 10):
 
 ```bash
 export QWEN36_CONTEXT_WINDOW=32768
-export QWEN32_CONTEXT_WINDOW=32768
+export EXECUTOR_CONTEXT_WINDOW=32768
 ```
 
 ### 软压缩的 Prompt 设计

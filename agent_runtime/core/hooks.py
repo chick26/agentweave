@@ -9,9 +9,15 @@ from agent_runtime.core.preset_questions import (
     generate_preset_question_result,
 )
 
+HOOK_PASS = 0
+HOOK_BLOCK = 1
+HOOK_INJECT = 2
+DEFAULT_HOOK_EVENTS = {"SessionStart", "PreToolUse", "PostToolUse"}
+
 
 @dataclass(frozen=True)
 class HookResult:
+    exit_code: int = HOOK_PASS
     message: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
     error: str = ""
@@ -26,6 +32,10 @@ class SessionStartContext:
     subagents_root: Path | None = None
     questions_per_domain: int = 2
     memory_context: str = ""
+    subagent_names: list[str] | None = None
+    welcome_mode: str = "providers"
+    welcome_provider_module: str = ""
+    preset_question_groups: list[dict[str, Any]] = field(default_factory=list)
 
 
 class HookHandler(Protocol):
@@ -45,6 +55,10 @@ class PresetQuestionsSessionStartHook:
             model_name=context.model_name,
             api_key=context.api_key,
             questions_per_domain=context.questions_per_domain,
+            subagent_names=context.subagent_names,
+            welcome_mode=context.welcome_mode,
+            welcome_provider_module=context.welcome_provider_module,
+            preset_question_groups=context.preset_question_groups,
         )
         message = format_welcome_message(result.groups, result.domains)
         if context.memory_context:
@@ -62,25 +76,62 @@ class PresetQuestionsSessionStartHook:
 
 
 class HookRunner:
-    def __init__(self, handlers: list[HookHandler] | None = None) -> None:
-        self.handlers = (
-            list(handlers) if handlers is not None else [PresetQuestionsSessionStartHook()]
-        )
+    def __init__(
+        self,
+        handlers: list[HookHandler] | dict[str, list[HookHandler]] | None = None,
+    ) -> None:
+        if handlers is None:
+            handlers = [PresetQuestionsSessionStartHook()]
+        self.handlers = _normalize_handlers(handlers)
 
     def run(self, event_name: str, context: Any) -> HookResult:
-        for handler in self.handlers:
-            if handler.event_name != event_name:
-                continue
+        handlers = self.handlers.get(event_name, [])
+        if not handlers and event_name in DEFAULT_HOOK_EVENTS:
+            return HookResult()
+        if not handlers:
+            return HookResult(error=f"Unsupported hook event: {event_name}")
+        for handler in handlers:
             try:
-                return handler.run(context)
+                result = handler.run(context)
             except Exception as exc:
-                return HookResult(
-                    message=_fallback_welcome(),
-                    payload={"source": "fallback"},
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-        return HookResult(error=f"Unsupported hook event: {event_name}")
+                return _hook_error_result(event_name, exc)
+            if result.exit_code in (HOOK_BLOCK, HOOK_INJECT):
+                return result
+        return result if handlers else HookResult()
+
+
+def run_hooks(
+    event_name: str,
+    payload: Any,
+    *,
+    handlers: list[HookHandler] | dict[str, list[HookHandler]] | None = None,
+) -> HookResult:
+    return HookRunner(handlers=handlers).run(event_name, payload)
+
+
+def _normalize_handlers(
+    handlers: list[HookHandler] | dict[str, list[HookHandler]],
+) -> dict[str, list[HookHandler]]:
+    if isinstance(handlers, dict):
+        return {event_name: list(items) for event_name, items in handlers.items()}
+    grouped: dict[str, list[HookHandler]] = {}
+    for handler in handlers:
+        grouped.setdefault(handler.event_name, []).append(handler)
+    return grouped
+
+
+def _hook_error_result(event_name: str, exc: Exception) -> HookResult:
+    if event_name == "SessionStart":
+        return HookResult(
+            message=_fallback_welcome(),
+            payload={"source": "fallback"},
+            error=f"{type(exc).__name__}: {exc}",
+        )
+    return HookResult(
+        payload={"source": "hook_error"},
+        error=f"{type(exc).__name__}: {exc}",
+    )
 
 
 def _fallback_welcome() -> str:
-    return "你好，我可以回答已接入数据领域的问数问题。"
+    return "你好，我可以回答已接入能力范围内的问题。"

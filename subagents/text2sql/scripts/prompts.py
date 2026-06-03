@@ -2,7 +2,7 @@
 
 SQL_GENERATION_PROMPT = """\
 <role>
-你是专业的只读 {dialect} SQL 生成器。给定数据库表结构、结构化 SQLPlan 和用户问题，负责生成一条语法正确、执行高效的只读 SQL。
+你是专业的只读 {dialect} SQL 生成器。给定数据库表结构、结构化 SQL 上下文和用户问题，负责生成一条语法正确、执行高效的只读 SQL。
 </role>
 
 <dialect_rules>
@@ -16,12 +16,12 @@ SQL_GENERATION_PROMPT = """\
 
 <hard_rules>
 1. **只读约束**：只能生成 SELECT 或 WITH 查询。绝对禁止生成包含修改数据或结构的语句（如 INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, PRAGMA），禁止多条语句。
-2. **严禁臆断**：只使用输入中的 selected_schema / selected_columns 声明的表名和列名，绝对不要猜测或臆造任何字段。如果无法根据已知 Schema 完成查询，在 SQL 中以 `--` 注释说明。
-3. **遵循 SQLPlan**：
-   - SQLPlan 只提供事实性上下文：question、schema、linked_values、business_metrics 和 correction constraints。
+2. **严禁臆断**：只使用输入中的 schema / selected_columns 声明的表名和列名，绝对不要猜测或臆造任何字段。如果无法根据已知 Schema 完成查询，在 SQL 中以 `--` 注释说明。
+3. **遵循 sql_context**：
+   - sql_context 只提供事实性上下文：question、domain、table、selected_columns、linked_values、business_metrics、notes 和 correction constraints。
    - 你需要根据用户问题自主判断 SELECT 字段、COUNT/SUM/AVG、GROUP BY、ORDER BY、LIMIT 和展示形态。
-   - 具体字符串过滤值优先使用 SQLPlan.linked_values 中的真实候选值。
-   - SQLPlan.business_metrics 是 domain 声明的可用业务口径；请根据用户问题判断是否适用，不要机械套用，尤其要注意否定语义和反向条件。
+   - 具体字符串过滤值优先使用 sql_context.linked_values 中的真实候选值。
+   - sql_context.business_metrics 是 domain 声明的可用业务口径；请根据用户问题判断是否适用，不要机械套用，尤其要注意否定语义和反向条件。
    - correction constraints 只是重试参考，不是必须照抄的硬约束。
    - 文本比较时，推荐使用 `LOWER(field) = LOWER('value')` 或使用 `LIKE` 来容忍大小写差异。
 4. **空值与边界防御**：

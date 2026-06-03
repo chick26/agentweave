@@ -2,7 +2,7 @@
 
 本文定义外部 TS Web 前端对接 AgentWeave Python 后端时使用的 HTTP/SSE 协议。TS Web 项目只依赖这里描述的接口，不依赖 Python 包内部结构。
 
-> 状态：第一版由 FastAPI 版 `agent_runtime.server` 实现，可通过 `python -m agent_runtime.server` 启动。
+> 状态：第一版由 FastAPI 版 `agent_runtime.server` 实现，可通过 `uv run agentweave-server` 启动。
 > 设计过程与取舍记录见 `docs/iterations/04-fastapi-sse-api-design.md`。
 
 ## 基础约定
@@ -31,15 +31,88 @@ Response `200`:
 {"status": "ok"}
 ```
 
+### `GET /capabilities`
+
+返回后端全局可挂载能力目录。前端只展示这些摘要，不接触 Python module path。
+
+Response `200`:
+
+```json
+{
+  "subagents": [
+    {"name": "text2sql", "description": "使用自然语言查询结构化数据", "routing_hints": []},
+    {"name": "rag", "description": "基于 PDF 知识库回答问题", "routing_hints": []}
+  ],
+  "skills": [
+    {"name": "data_analysis", "description": "数据分析方法卡", "activation_hints": []}
+  ]
+}
+```
+
+### `GET /bots`
+
+返回已配置机器人列表。
+
+Response `200`:
+
+```json
+[
+  {
+    "id": "data_analyst",
+    "name": "数据分析机器人",
+    "description": "结构化数据查询、分析和报告总结。",
+    "subagents": ["text2sql", "rag"],
+    "skills": ["data_analysis"],
+    "generated": false
+  }
+]
+```
+
+### `GET /bots/{bot_id}`
+
+返回单个 bot 配置和解析后的能力摘要。
+
+Response `200`:
+
+```json
+{
+  "id": "data_analyst",
+  "name": "数据分析机器人",
+  "description": "结构化数据查询、分析和报告总结。",
+  "instructions": "你是数据分析机器人...",
+  "subagents": ["text2sql", "rag"],
+  "skills": ["data_analysis"],
+  "welcome": {
+    "mode": "static",
+    "provider_module": "",
+    "preset_questions": [
+      {
+        "domain_name": "idc_resources",
+        "title": "IDC 资源",
+        "questions": ["403机房有多少可用机柜？"]
+      }
+    ]
+  },
+  "resolved": {
+    "subagents": [
+      {"name": "text2sql", "description": "...", "routing_hints": []},
+      {"name": "rag", "description": "...", "routing_hints": []}
+    ],
+    "skills": [{"name": "data_analysis", "description": "...", "activation_hints": []}]
+  }
+}
+```
+
 ### `POST /sessions`
 
-创建一个会话，并返回首页 welcome message 和能力列表。
+创建一个会话，固定绑定 `bot_id`，并返回首页 welcome message。
 
 Request:
 
 ```json
 {
   "session_id": "",
+  "bot_id": "data_analyst",
   "metadata": {
     "client": "agentweave-web"
   }
@@ -51,7 +124,9 @@ Response `200`:
 ```json
 {
   "session_id": "web-9f0c1b2a",
-  "message": "你好，我可以回答已接入数据领域的问数问题。",
+  "bot_id": "data_analyst",
+  "bot": {"id": "data_analyst", "name": "数据分析机器人", "description": "..."},
+  "message": "你好，我可以回答已接入能力范围内的问题。",
   "capabilities": {
     "streaming": true,
     "results": true,
@@ -64,6 +139,7 @@ Response `200`:
 ### `POST /sessions/{session_id}/runs`
 
 提交用户问题，创建一次 run。前端拿到 `events_url` 后订阅 SSE。
+run 不接受临时 subagent/skill 选择，后端使用 session 创建时绑定的 `bot_id`。
 
 Request:
 
@@ -83,6 +159,7 @@ Response `202`:
 {
   "run_id": "run_01HXYZ",
   "session_id": "web-9f0c1b2a",
+  "bot_id": "data_analyst",
   "status": "queued",
   "events_url": "/runs/run_01HXYZ/events"
 }
@@ -106,7 +183,7 @@ data: {"type":"runtime_event","run_id":"run_01HXYZ","sequence":1,"timestamp":"20
 
 id: 8
 event: run_complete
-data: {"type":"run_complete","run_id":"run_01HXYZ","session_id":"web-9f0c1b2a","sequence":8,"timestamp":"2026-06-01T10:00:08Z","answer":"403机房有 12 个可用机柜。","result_ids":["res_abc"]}
+data: {"type":"run_complete","run_id":"run_01HXYZ","session_id":"web-9f0c1b2a","bot_id":"data_analyst","sequence":8,"timestamp":"2026-06-01T10:00:08Z","answer":"403机房有 12 个可用机柜。","result_ids":["res_abc"]}
 ```
 
 如果后端启用了模型流式输出，`run_complete` 之前还会出现 `model_delta`。前端应根据 `payload.kind`、`payload.stage`、`payload.title`、`payload.model` 自行决定展示位置；`run_complete.answer` 仍是最终答案的权威值。
@@ -190,7 +267,7 @@ Response `200`:
 
 ### `POST /resources/reload`
 
-管理端触发 skills、subagents、domains、project rules 重载。
+管理端触发 skills、subagents、bots、domains、project rules 重载。
 
 Request:
 
@@ -205,7 +282,7 @@ Response `200`:
 ```json
 {
   "reloaded": true,
-  "message": "skills=1 subagents=1 domains=2",
+  "message": "skills=1 subagents=2 bots=1 domains=2",
   "event": {
     "kind": "resources_reloaded",
     "payload": {"stage": "resources_reloaded"}
@@ -334,6 +411,12 @@ run 失败结束。
 ```ts
 export interface SessionResponse {
   session_id: string;
+  bot_id: string;
+  bot: {
+    id: string;
+    name: string;
+    description: string;
+  };
   message: string;
   capabilities: {
     streaming: boolean;
@@ -346,8 +429,32 @@ export interface SessionResponse {
 export interface RunCreatedResponse {
   run_id: string;
   session_id: string;
+  bot_id: string;
   status: "queued" | "running" | "completed" | "failed";
   events_url: string;
+}
+
+export interface CapabilitiesResponse {
+  subagents: Array<{
+    name: string;
+    description: string;
+    routing_hints: string[];
+    execution_mode?: string;
+  }>;
+  skills: Array<{
+    name: string;
+    description: string;
+    activation_hints: string[];
+  }>;
+}
+
+export interface BotSummary {
+  id: string;
+  name: string;
+  description: string;
+  subagents: string[];
+  skills: string[];
+  generated: boolean;
 }
 
 export interface RuntimeEvent {

@@ -1,12 +1,16 @@
 # Local Data Directory
 
-Place private CSV or database files here for local development.
+This global directory is kept for ad-hoc local files.
+New subagent-specific local test data should live inside the corresponding
+capability package:
 
-This directory is intentionally ignored by git. Configure table mappings with
-`TEXT2SQL_TABLES_JSON`, for example:
+- Text2SQL: `subagents/text2sql/data/`
+- RAG: `subagents/rag/data/`
 
-```bash
-export TEXT2SQL_TABLES_JSON='{"resources":"data/resources.csv","sea_cable_faults":"data/sea_cable_faults.csv"}'
-```
+Each subagent owns its own environment instructions:
 
-Do not commit real customer, production, or private datasets.
+- `subagents/text2sql/ENVIRONMENT.md`
+- `subagents/rag/ENVIRONMENT.md`
+
+This directory is intentionally ignored by git. Do not commit customer,
+production, or private datasets.

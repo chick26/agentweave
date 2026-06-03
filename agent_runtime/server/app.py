@@ -50,6 +50,24 @@ def create_app(
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/capabilities", dependencies=[Depends(require_auth)])
+    def capabilities(service: AgentService = Depends(current_service)) -> dict[str, Any]:
+        return service.list_capabilities()
+
+    @app.get("/bots", dependencies=[Depends(require_auth)])
+    def list_bots(service: AgentService = Depends(current_service)) -> list[dict[str, Any]]:
+        return service.list_bots()
+
+    @app.get("/bots/{bot_id}", dependencies=[Depends(require_auth)])
+    def get_bot(
+        bot_id: str,
+        service: AgentService = Depends(current_service),
+    ) -> dict[str, Any]:
+        try:
+            return service.get_bot(bot_id)
+        except ValueError as exc:
+            raise _not_found(KeyError(str(exc))) from exc
+
     @app.post("/sessions", dependencies=[Depends(require_auth)])
     def create_session(
         payload: dict[str, Any] | None = Body(default=None),
@@ -58,6 +76,7 @@ def create_app(
         payload = _dict_or_empty(payload)
         return service.create_session(
             session_id=str(payload.get("session_id") or ""),
+            bot_id=str(payload.get("bot_id") or "default"),
             metadata=_dict_or_empty(payload.get("metadata")),
         )
 

@@ -8,14 +8,16 @@ from agent_runtime.storage.database import CsvSQLiteBackend, DatabaseBackend, Sq
 from agent_runtime.core.model_profiles import ModelProfile, load_model_profiles
 
 
-DEFAULT_CSV_TABLES = {
-    "resources": "data/resources.csv",
-    "sea_cable_faults": "data/sea_cable_faults.csv",
-}
+TEXT2SQL_ENVIRONMENT_ERROR = (
+    "Text2SQL database environment is not prepared. Follow "
+    "subagents/text2sql/ENVIRONMENT.md, prepare the database first, then start runtime."
+)
 
 
 def load_database_backend(root: Path) -> DatabaseBackend:
-    backend_kind = os.getenv("TEXT2SQL_BACKEND", "csv").strip().lower()
+    backend_kind = os.getenv("TEXT2SQL_BACKEND", "").strip().lower()
+    if not backend_kind:
+        raise RuntimeError(TEXT2SQL_ENVIRONMENT_ERROR)
     if backend_kind == "csv":
         return CsvSQLiteBackend(load_csv_tables(root))
     if backend_kind == "sqlite":
@@ -28,18 +30,17 @@ def load_database_backend(root: Path) -> DatabaseBackend:
 
 def load_csv_tables(root: Path) -> dict[str, Path]:
     raw_config = os.getenv("TEXT2SQL_TABLES_JSON")
-    if raw_config:
-        tables = json.loads(raw_config)
-        if not isinstance(tables, dict):
-            raise ValueError("TEXT2SQL_TABLES_JSON must be a JSON object")
-        return {
-            str(table): _resolve_path(root, str(path))
-            for table, path in tables.items()
-        }
+    if not raw_config:
+        raise RuntimeError(
+            "TEXT2SQL_TABLES_JSON is required when TEXT2SQL_BACKEND=csv. "
+            "Follow subagents/text2sql/ENVIRONMENT.md to prepare the database."
+        )
+    tables = json.loads(raw_config)
+    if not isinstance(tables, dict):
+        raise ValueError("TEXT2SQL_TABLES_JSON must be a JSON object")
     return {
-        table: path
-        for table, filename in DEFAULT_CSV_TABLES.items()
-        if (path := root / filename).exists()
+        str(table): _resolve_path(root, str(path))
+        for table, path in tables.items()
     }
 
 

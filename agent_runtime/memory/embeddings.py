@@ -50,12 +50,19 @@ def load_embedding_profile(
     api_key: str | None = None,
     enabled: bool | None = None,
 ) -> EmbeddingProfile:
+    emb_key = os.getenv("EMBEDDING_API_KEY")
+    if not emb_key:
+        if api_key and api_key != "not-needed":
+            emb_key = api_key
+        else:
+            emb_key = os.getenv("OPENAI_API_KEY", "not-needed")
+
     return EmbeddingProfile(
         base_url=base_url
         or os.getenv("EMBEDDING_BASE_URL", "http://localhost:8002/v1"),
         model_name=model_name
         or os.getenv("EMBEDDING_MODEL", "openai-compatible-embedding-model"),
-        api_key=api_key or os.getenv("OPENAI_API_KEY", "not-needed"),
+        api_key=emb_key,
         enabled=env_bool("MEMORY_EMBEDDING_ENABLED", True)
         if enabled is None
         else enabled,

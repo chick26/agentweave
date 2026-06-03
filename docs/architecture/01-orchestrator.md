@@ -45,6 +45,7 @@ class AgentRuntime:
         
         self.skill_registry = SkillRegistry(skills_root=self.root / "skills")
         self.agent_registry = AgentRegistry(subagents_root=self.root / "subagents")
+        self.bot_registry = BotRegistry(bots_root=self.root / "bots", ...)
         
         self.memory_manager = MemoryManager(...)
         self.result_store = ResultStore(self.root / "agent_results.sqlite")
@@ -56,6 +57,24 @@ class AgentRuntime:
         self.compressor = ContextCompressor(model=...)
         self.hook_runner = HookRunner(...)
 ```
+
+## Bot 配置与能力裁剪
+
+`subagents/*/AGENT.yaml + prompt.md` 和 `skills/*/SKILL.md` 是全局能力目录；`bots/*/BOT.yaml`
+才决定某个机器人实际挂载哪些能力。外部前端创建 session 时传入 `bot_id`，后端把
+这个 session 固定绑定到对应 Bot，后续 run 不再接受临时能力选择。
+
+运行时会按 Bot 做裁剪：
+
+- `<subagents_routing>` 只包含当前 Bot 允许的 subagents。
+- `<skills_catalog>` 只包含当前 Bot 允许的 skills。
+- `_build_tools()` 只暴露当前 Bot 的 subagent tools。
+- `load_skill` 只能读取当前 Bot 挂载的 skill。
+- `SessionStart` welcome 只读取当前 Bot 的 welcome 配置。
+- `welcome.mode: static` 时，首页 preset questions 直接来自 `BOT.yaml`，
+  不调用 Python provider；`providers` 保留给 Bot 级动态生成，`mixed` 可同时使用静态配置和 provider。
+
+没有显式配置时，后端生成 `default` Bot，兼容“加载全部能力”的旧行为。
 
 ## Agent 循环：ask() 的生命周期
 
@@ -72,7 +91,8 @@ async def ask(
     user_input: str, 
     session_id: str, 
     event_callback, 
-    max_turns: int = 10
+    max_turns: int = 10,
+    bot_id: str = "default",
 ) -> dict:
     
     context = OrchestratorContext(...)
@@ -85,9 +105,9 @@ async def ask(
     # 2. 构建 Agent 实例 (包含 System Prompt 和 Tools)
     agent = Agent[OrchestratorContext](
         name="Agent Orchestrator",
-        instructions=self._build_instructions(session_id, ...),
+        instructions=self._build_instructions(session_id, ..., bot=bot),
         model=build_model(profile, ...),
-        tools=self._build_tools(),
+        tools=self._build_tools(bot=bot),
     )
     
     # 3. 运行主循环

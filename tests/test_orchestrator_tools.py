@@ -6,16 +6,25 @@ from types import SimpleNamespace
 from agents.tool_context import ToolContext
 
 from agent_runtime.core.context import OrchestratorContext, RunContext
+from agent_runtime.core.hooks import HookResult, HookRunner
 from agent_runtime.storage.database import CsvSQLiteBackend
 from agent_runtime.memory.memory_manager import TodoItem
 from agent_runtime.core.orchestrator import AgentRuntime
 from agent_runtime.core.prompts import SYSTEM_PROMPT
-from agent_runtime.core.settings import load_database_backend
+
+
+def _text2sql_test_backend() -> CsvSQLiteBackend:
+    return CsvSQLiteBackend(
+        {
+            "resources": Path("subagents/text2sql/data/resources.csv"),
+            "sea_cable_faults": Path("subagents/text2sql/data/sea_cable_faults.csv"),
+        }
+    )
 
 
 def test_orchestrator_exposes_only_runtime_tools():
     runtime = AgentRuntime(
-        backend=load_database_backend(Path(".")),
+        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -49,7 +58,7 @@ def test_orchestrator_exposes_only_runtime_tools():
 
 def test_orchestrator_hides_memory_surface_when_disabled(tmp_path):
     runtime = AgentRuntime(
-        backend=load_database_backend(Path(".")),
+        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -70,9 +79,135 @@ def test_orchestrator_hides_memory_surface_when_disabled(tmp_path):
     assert "不要注入这条记忆。" not in instructions
 
 
+def test_pre_tool_hook_can_block_runtime_tool(tmp_path):
+    runtime = AgentRuntime(
+        backend=_text2sql_test_backend(),
+        base_url="http://example.test/v1",
+        model_name="orchestrator",
+        api_key="not-needed",
+        session_db_path=tmp_path / "sessions.sqlite",
+    )
+
+    class BlockTimeHook:
+        event_name = "PreToolUse"
+
+        def run(self, payload):
+            return HookResult(exit_code=1, message=f"blocked:{payload['tool_name']}")
+
+    runtime.hook_runner = HookRunner(handlers=[BlockTimeHook()])
+    tool = next(tool for tool in runtime._build_tools() if tool.name == "get_current_time")
+    context = OrchestratorContext(
+        session_id="abc",
+        backend=runtime.backend,
+        model_profiles=runtime.model_profiles,
+    )
+
+    output = asyncio.run(
+        tool.on_invoke_tool(
+            ToolContext(
+                context=context,
+                tool_name="get_current_time",
+                tool_call_id="call_1",
+                tool_arguments=json.dumps({"timezone_name": ""}),
+            ),
+            json.dumps({"timezone_name": ""}),
+        )
+    )
+
+    payload = json.loads(output)
+    assert payload["blocked"] is True
+    assert payload["error"] == "blocked:get_current_time"
+    assert context.events[-1]["payload"]["status"] == "blocked"
+
+
+def test_pre_tool_hook_injection_is_returned_to_model(tmp_path):
+    runtime = AgentRuntime(
+        backend=_text2sql_test_backend(),
+        base_url="http://example.test/v1",
+        model_name="orchestrator",
+        api_key="not-needed",
+        session_db_path=tmp_path / "sessions.sqlite",
+    )
+
+    class InjectHook:
+        event_name = "PreToolUse"
+
+        def run(self, payload):
+            return HookResult(exit_code=2, message="use explicit timezone")
+
+    runtime.hook_runner = HookRunner(handlers=[InjectHook()])
+    tool = next(tool for tool in runtime._build_tools() if tool.name == "get_current_time")
+    context = OrchestratorContext(
+        session_id="abc",
+        backend=runtime.backend,
+        model_profiles=runtime.model_profiles,
+    )
+
+    output = asyncio.run(
+        tool.on_invoke_tool(
+            ToolContext(
+                context=context,
+                tool_name="get_current_time",
+                tool_call_id="call_1",
+                tool_arguments=json.dumps({"timezone_name": ""}),
+            ),
+            json.dumps({"timezone_name": ""}),
+        )
+    )
+
+    payload = json.loads(output)
+    assert payload["hook_injection"] == {
+        "source": "pre_tool_use",
+        "message": "use explicit timezone",
+    }
+    assert payload["timezone"] == runtime.timezone_name
+
+
+def test_post_tool_hook_receives_output_payload(tmp_path):
+    runtime = AgentRuntime(
+        backend=_text2sql_test_backend(),
+        base_url="http://example.test/v1",
+        model_name="orchestrator",
+        api_key="not-needed",
+        session_db_path=tmp_path / "sessions.sqlite",
+    )
+    captured = []
+
+    class CapturePostHook:
+        event_name = "PostToolUse"
+
+        def run(self, payload):
+            captured.append(payload)
+            return HookResult()
+
+    runtime.hook_runner = HookRunner(handlers=[CapturePostHook()])
+    tool = next(tool for tool in runtime._build_tools() if tool.name == "get_current_time")
+    context = OrchestratorContext(
+        session_id="abc",
+        backend=runtime.backend,
+        model_profiles=runtime.model_profiles,
+    )
+
+    asyncio.run(
+        tool.on_invoke_tool(
+            ToolContext(
+                context=context,
+                tool_name="get_current_time",
+                tool_call_id="call_1",
+                tool_arguments=json.dumps({"timezone_name": ""}),
+            ),
+            json.dumps({"timezone_name": ""}),
+        )
+    )
+
+    assert captured[0]["tool_name"] == "get_current_time"
+    assert captured[0]["status"] == "completed"
+    assert captured[0]["output"]["timezone"] == runtime.timezone_name
+
+
 def test_runtime_clear_memory_clears_persisted_memory(tmp_path):
     runtime = AgentRuntime(
-        backend=load_database_backend(Path(".")),
+        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -185,7 +320,7 @@ def test_skill_agent_tool_invocation_creates_isolated_worker_contexts(tmp_path, 
 
 def test_load_skill_returns_skill_body(tmp_path):
     runtime = AgentRuntime(
-        backend=load_database_backend(Path(".")),
+        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -245,7 +380,7 @@ def test_prompt_keeps_delegation_compact():
 
 def test_memory_injection(tmp_path):
     runtime = AgentRuntime(
-        backend=load_database_backend(Path(".")),
+        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -272,7 +407,7 @@ def test_memory_injection(tmp_path):
 
 def test_todo_context_injected_into_instructions(tmp_path):
     runtime = AgentRuntime(
-        backend=load_database_backend(Path(".")),
+        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -295,7 +430,7 @@ def test_todo_context_injected_into_instructions(tmp_path):
 
 def test_skills_section_includes_execution_mode():
     runtime = AgentRuntime(
-        backend=load_database_backend(Path(".")),
+        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -311,9 +446,85 @@ def test_skills_section_includes_execution_mode():
     assert 'name="data_analysis"' in skills_section
 
 
+def test_runtime_scopes_tools_prompt_and_load_skill_by_bot(tmp_path):
+    (tmp_path / "data.csv").write_text("value\n1\n", encoding="utf-8")
+    for name in ("data_analysis", "extra_skill"):
+        skill_dir = tmp_path / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {name}\n---\n{name} body",
+            encoding="utf-8",
+        )
+    for name in ("text2sql", "api_call"):
+        subagent_dir = tmp_path / "subagents" / name
+        subagent_dir.mkdir(parents=True)
+        (subagent_dir / "AGENT.yaml").write_text(
+            f"name: {name}\n"
+            f"description: {name}\n"
+            "execution:\n"
+            "  mode: worker\n",
+            encoding="utf-8",
+        )
+        (subagent_dir / "prompt.md").write_text(f"{name} prompt", encoding="utf-8")
+    bot_dir = tmp_path / "bots" / "data_analyst"
+    bot_dir.mkdir(parents=True)
+    (bot_dir / "BOT.yaml").write_text(
+        "id: data_analyst\n"
+        "name: 数据分析机器人\n"
+        "instructions: 只做数据分析。\n"
+        "subagents:\n"
+        "  - text2sql\n"
+        "skills:\n"
+        "  - data_analysis\n",
+        encoding="utf-8",
+    )
+    runtime = AgentRuntime(
+        backend=CsvSQLiteBackend({"data": tmp_path / "data.csv"}),
+        base_url="http://example.test/v1",
+        model_name="orchestrator",
+        api_key="not-needed",
+        session_db_path=tmp_path / "sessions.sqlite",
+    )
+    bot = runtime.bot_registry.get("data_analyst")
+
+    tool_names = {tool.name for tool in runtime._build_tools(bot=bot)}
+    instructions = runtime._build_instructions("abc", bot=bot)
+    section = runtime._build_skills_section(bot=bot)
+
+    assert "text2sql" in tool_names
+    assert "api_call" not in tool_names
+    assert 'name="text2sql"' in section
+    assert 'name="api_call"' not in section
+    assert 'name="data_analysis"' in section
+    assert 'name="extra_skill"' not in section
+    assert "只做数据分析。" in instructions
+
+    load_skill = next(tool for tool in runtime._build_tools(bot=bot) if tool.name == "load_skill")
+    context = OrchestratorContext(
+        session_id="abc",
+        backend=runtime.backend,
+        model_profiles=runtime.model_profiles,
+    )
+    output = asyncio.run(
+        load_skill.on_invoke_tool(
+            ToolContext(
+                context=context,
+                tool_name="load_skill",
+                tool_call_id="call_1",
+                tool_arguments=json.dumps({"skill_name": "extra_skill"}),
+            ),
+            json.dumps({"skill_name": "extra_skill"}),
+        )
+    )
+
+    payload = json.loads(output)
+    assert "not enabled for bot `data_analyst`" in payload["error"]
+    assert payload["available_skills"] == ["data_analysis"]
+
+
 def test_runtime_ask_without_model_delta_uses_non_streaming_runner(tmp_path, monkeypatch):
     runtime = AgentRuntime(
-        backend=load_database_backend(Path(".")),
+        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -345,7 +556,7 @@ def test_runtime_ask_without_model_delta_uses_non_streaming_runner(tmp_path, mon
 
 def test_runtime_ask_streams_only_output_text_delta(tmp_path, monkeypatch):
     runtime = AgentRuntime(
-        backend=load_database_backend(Path(".")),
+        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",

@@ -75,6 +75,7 @@ def test_execute_sql_emits_result_created_ui_event(tmp_path, monkeypatch):
         result_store=store,
         active_domain="sea_cable_faults",
         active_table="sea_cable_faults",
+        agent_registry=AgentRegistry(subagents_root=Path("subagents")),
     )
 
     output = asyncio.run(
@@ -84,10 +85,18 @@ def test_execute_sql_emits_result_created_ui_event(tmp_path, monkeypatch):
                 tool_name="execute_sql",
                 tool_call_id="call_execute",
                 tool_arguments=json.dumps(
-                    {"sql": "SELECT sea_cable_no FROM sea_cable_faults"}
+                    {
+                        "domain_name": "sea_cable_faults",
+                        "sql": "SELECT sea_cable_no FROM sea_cable_faults",
+                    }
                 ),
             ),
-            json.dumps({"sql": "SELECT sea_cable_no FROM sea_cable_faults"}),
+            json.dumps(
+                {
+                    "domain_name": "sea_cable_faults",
+                    "sql": "SELECT sea_cable_no FROM sea_cable_faults",
+                }
+            ),
         )
     )
     payload = json.loads(output)
@@ -112,6 +121,39 @@ def test_execute_sql_emits_result_created_ui_event(tmp_path, monkeypatch):
     assert tool_events[-1]["payload"]["status"] == "completed"
 
 
+def test_get_domain_schema_requires_prepared_database_environment():
+    run_ctx = RunContext(
+        run_id="schema-missing-db-run",
+        backend=None,
+        model_profiles={},
+        agent_registry=AgentRegistry(subagents_root=Path("subagents")),
+    )
+
+    output = asyncio.run(
+        tools.get_domain_schema.on_invoke_tool(
+            ToolContext(
+                context=run_ctx,
+                tool_name="get_domain_schema",
+                tool_call_id="call_schema",
+                tool_arguments=json.dumps(
+                    {
+                        "domain_name": "idc_resources",
+                    }
+                ),
+            ),
+            json.dumps(
+                {
+                    "domain_name": "idc_resources",
+                }
+            ),
+        )
+    )
+    payload = json.loads(output)
+
+    assert "database environment is not prepared" in payload["error"]
+    assert "ENVIRONMENT.md" in payload["error"]
+
+
 def test_execute_sql_emits_failed_tool_lifecycle(tmp_path):
     csv_path = tmp_path / "faults.csv"
     csv_path.write_text("sea_cable_no\nNCP\n", encoding="utf-8")
@@ -123,6 +165,7 @@ def test_execute_sql_emits_failed_tool_lifecycle(tmp_path):
         result_store=ResultStore(tmp_path / "agent_results.sqlite"),
         active_domain="sea_cable_faults",
         active_table="sea_cable_faults",
+        agent_registry=AgentRegistry(subagents_root=Path("subagents")),
     )
 
     output = asyncio.run(
@@ -131,9 +174,19 @@ def test_execute_sql_emits_failed_tool_lifecycle(tmp_path):
                 context=run_ctx,
                 tool_name="execute_sql",
                 tool_call_id="call_execute",
-                tool_arguments=json.dumps({"sql": "SELECT missing FROM sea_cable_faults"}),
+                tool_arguments=json.dumps(
+                    {
+                        "domain_name": "sea_cable_faults",
+                        "sql": "SELECT missing FROM sea_cable_faults",
+                    }
+                ),
             ),
-            json.dumps({"sql": "SELECT missing FROM sea_cable_faults"}),
+            json.dumps(
+                {
+                    "domain_name": "sea_cable_faults",
+                    "sql": "SELECT missing FROM sea_cable_faults",
+                }
+            ),
         )
     )
     payload = json.loads(output)
@@ -166,6 +219,7 @@ def test_execute_sql_marks_store_truncation_without_claiming_exact_total(tmp_pat
         result_store=store,
         active_domain="sea_cable_faults",
         active_table="sea_cable_faults",
+        agent_registry=AgentRegistry(subagents_root=Path("subagents")),
     )
 
     output = asyncio.run(
@@ -175,10 +229,18 @@ def test_execute_sql_marks_store_truncation_without_claiming_exact_total(tmp_pat
                 tool_name="execute_sql",
                 tool_call_id="call_execute",
                 tool_arguments=json.dumps(
-                    {"sql": "SELECT sea_cable_no FROM sea_cable_faults"}
+                    {
+                        "domain_name": "sea_cable_faults",
+                        "sql": "SELECT sea_cable_no FROM sea_cable_faults",
+                    }
                 ),
             ),
-            json.dumps({"sql": "SELECT sea_cable_no FROM sea_cable_faults"}),
+            json.dumps(
+                {
+                    "domain_name": "sea_cable_faults",
+                    "sql": "SELECT sea_cable_no FROM sea_cable_faults",
+                }
+            ),
         )
     )
     payload = json.loads(output)
@@ -195,7 +257,7 @@ def test_execute_sql_marks_store_truncation_without_claiming_exact_total(tmp_pat
     ]
 
 
-def test_plan_sql_query_runs_internal_domain_and_value_steps(tmp_path, monkeypatch):
+def test_explicit_schema_value_and_sql_generation_steps(tmp_path, monkeypatch):
     csv_path = tmp_path / "resources.csv"
     csv_path.write_text(
         "machine_room,cabinet_business_status\n"
@@ -204,11 +266,11 @@ def test_plan_sql_query_runs_internal_domain_and_value_steps(tmp_path, monkeypat
     )
     backend = CsvSQLiteBackend({"resources": csv_path})
     run_ctx = RunContext(
-        run_id="plan-run",
+        run_id="explicit-text2sql-run",
         backend=backend,
         model_profiles={
-            "sql_worker": ModelProfile(
-                role="sql_worker",
+            "executor": ModelProfile(
+                role="executor",
                 base_url="http://sql.test/v1",
                 model_name="sql",
                 api_key="key",
@@ -224,19 +286,65 @@ def test_plan_sql_query_runs_internal_domain_and_value_steps(tmp_path, monkeypat
             "WHERE machine_room = '403' AND cabinet_business_status = 'Available'"
         )
 
-    monkeypatch.setattr(tools, "call_chat_model", fake_call_chat_model)
+    monkeypatch.setattr(
+        "subagents.text2sql.scripts.sql_generation.call_chat_model",
+        fake_call_chat_model,
+    )
 
-    output = asyncio.run(
-        tools.plan_sql_query.on_invoke_tool(
+    schema_output = asyncio.run(
+        tools.get_domain_schema.on_invoke_tool(
             ToolContext(
                 context=run_ctx,
-                tool_name="plan_sql_query",
-                tool_call_id="call_plan",
+                tool_name="get_domain_schema",
+                tool_call_id="call_schema",
+                tool_arguments=json.dumps(
+                    {
+                        "domain_name": "idc_resources",
+                    }
+                ),
+            ),
+            json.dumps(
+                {
+                    "domain_name": "idc_resources",
+                }
+            ),
+        )
+    )
+    value_output = asyncio.run(
+        tools.search_domain_values.on_invoke_tool(
+            ToolContext(
+                context=run_ctx,
+                tool_name="search_domain_values",
+                tool_call_id="call_values",
+                tool_arguments=json.dumps(
+                    {
+                        "domain_name": "idc_resources",
+                        "query": "403",
+                        "fields": ["machine_room"],
+                    }
+                ),
+            ),
+            json.dumps(
+                {
+                    "domain_name": "idc_resources",
+                    "query": "403",
+                    "fields": ["machine_room"],
+                }
+            ),
+        )
+    )
+    linked_values = json.loads(value_output)["linked_values"]
+    output = asyncio.run(
+        tools.generate_readonly_sql.on_invoke_tool(
+            ToolContext(
+                context=run_ctx,
+                tool_name="generate_readonly_sql",
+                tool_call_id="call_generate",
                 tool_arguments=json.dumps(
                     {
                         "question": "403机房有多少可用机柜？",
                         "domain_name": "idc_resources",
-                        "value_queries": ["403", "可用"],
+                        "linked_values": linked_values,
                     }
                 ),
             ),
@@ -244,34 +352,34 @@ def test_plan_sql_query_runs_internal_domain_and_value_steps(tmp_path, monkeypat
                 {
                     "question": "403机房有多少可用机柜？",
                     "domain_name": "idc_resources",
-                    "value_queries": ["403", "可用"],
+                    "linked_values": linked_values,
                 }
             ),
         )
     )
+    schema_payload = json.loads(schema_output)
     payload = json.loads(output)
     stages = [event["payload"]["stage"] for event in run_ctx.events]
 
+    assert schema_payload["domain"] == "idc_resources"
+    assert schema_payload["table"] == "resources"
+    assert "machine_room" in schema_payload["columns"]
     assert payload["domain"] == "idc_resources"
-    assert payload["sql_plan"]["linked_values"][0]["field"] == "machine_room"
+    assert payload["linked_values"][0]["field"] == "machine_room"
     metrics = {
         metric["name"]: metric
-        for metric in payload["sql_plan"]["business_metrics"]
+        for metric in payload["business_metrics"]
     }
     assert metrics["available_cabinet_count"]["filters"] == {
         "cabinet_business_status": "Available"
     }
-    assert "business_metric" not in payload
-    assert "confidence" not in payload
-    assert "unlinked_values" not in payload
-    assert "assumptions" not in payload
     assert payload["sql"].startswith("SELECT COUNT(*)")
     assert payload["validation_error"] == ""
-    assert {"activation", "search_values", "sql_plan", "sql_extract"} <= set(stages)
+    assert {"activation", "schema", "search_values", "sql_extract"} <= set(stages)
     tool_events = [
         event for event in run_ctx.events
         if event["kind"] in {"tool_call_start", "tool_result", "tool_call_end"}
-        and event["payload"].get("tool_name") == "plan_sql_query"
+        and event["payload"].get("tool_name") == "generate_readonly_sql"
     ]
     assert [event["kind"] for event in tool_events] == [
         "tool_call_start",

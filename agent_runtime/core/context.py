@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from agent_runtime.storage.database import DatabaseBackend
@@ -10,7 +11,7 @@ from agent_runtime.core.events import EventBus, EventKind, RuntimeEvent
 
 @dataclass(kw_only=True)
 class BaseContext:
-    backend: DatabaseBackend
+    backend: DatabaseBackend | None
     model_profiles: dict[str, ModelProfile]
     result_store: Any | None = None
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -50,6 +51,8 @@ class OrchestratorContext(BaseContext):
 @dataclass
 class RunContext(BaseContext):
     run_id: str
+    runtime_root: Path | None = None
+    active_subagent: str = ""
     active_domain: str = ""
     active_table: str = ""
     active_text_fields: list[str] = field(default_factory=list)

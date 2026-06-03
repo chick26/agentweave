@@ -9,7 +9,7 @@ from typing import Any
 
 import streamlit as st
 
-from agent_runtime.common import load_env_file, utc_now_iso
+from agent_runtime.common import load_runtime_env_files, utc_now_iso
 from agent_runtime.core.session_ops import (
     fork_sqlite_session,
     replace_sqlite_session_items,
@@ -42,18 +42,18 @@ from agent_runtime.ui.streamlit.styles import inject_styles
 
 
 ROOT = Path(__file__).resolve().parents[3]
-load_env_file(ROOT / ".env")
+load_runtime_env_files(ROOT)
 SESSION_DB_PATH = ROOT / ".streamlit_agent_sessions.sqlite"
 SESSION_TEMPLATE_DB_PATH = ROOT / "agent_session_templates.sqlite"
 TEXT2SQL_AGENT_ROOT = ROOT / "subagents" / "text2sql"
 
 # -- Model defaults (hidden from UI) ----------------------------------
 BASE_URL = os.getenv("QWEN36_BASE_URL", "http://localhost:8000/v1")
-MODEL_NAME = os.getenv("QWEN36_MODEL", "openai-compatible-chat-model")
+MODEL_NAME = os.getenv("QWEN36_MODEL", "qwen3.6-27b")
 MAX_OUTPUT_TOKENS = 8192
-SQL_BASE_URL = os.getenv("QWEN32_BASE_URL", "http://localhost:8001/v1")
-SQL_MODEL_NAME = os.getenv("QWEN32_MODEL", "openai-compatible-sql-model")
-SQL_MAX_OUTPUT_TOKENS = 2048
+SQL_BASE_URL = os.getenv("EXECUTOR_BASE_URL", "http://localhost:8001/v1")
+SQL_MODEL_NAME = os.getenv("EXECUTOR_MODEL", "qwen3-32b")
+SQL_MAX_OUTPUT_TOKENS = int(os.getenv("EXECUTOR_MAX_TOKENS", "2048"))
 EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "http://localhost:8002/v1")
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "openai-compatible-embedding-model")
 API_KEY = os.getenv("OPENAI_API_KEY", "not-needed")
@@ -92,7 +92,7 @@ api_key = sidebar_config.api_key
 
 
 def get_domains_signature(domain_configs_root: Path) -> tuple[tuple[str, int, int], ...]:
-    paths = list(domain_configs_root.glob("*/DOMAIN.md"))
+    paths = [domain_configs_root / "domain_catalog.yaml"]
     return tuple(
         (
             str(path.relative_to(domain_configs_root)),
@@ -100,6 +100,7 @@ def get_domains_signature(domain_configs_root: Path) -> tuple[tuple[str, int, in
             path.stat().st_size,
         )
         for path in sorted(paths)
+        if path.exists()
     )
 
 
@@ -131,10 +132,8 @@ def get_runtime(
     memory_enabled: bool,
 ):
     from agent_runtime.core.orchestrator import AgentRuntime
-    from agent_runtime.core.settings import load_database_backend
 
     return AgentRuntime(
-        backend=load_database_backend(ROOT),
         base_url=base_url,
         model_name=model_name,
         api_key=api_key,
@@ -318,7 +317,7 @@ if fork_session_requested:
     except Exception as exc:
         st.error(f"会话分叉失败：`{type(exc).__name__}: {exc}`")
 
-domains_root = TEXT2SQL_AGENT_ROOT / "domains"
+domains_root = TEXT2SQL_AGENT_ROOT
 domains_signature = get_domains_signature(domains_root)
 initial_message_signature = (
     base_url,

@@ -10,7 +10,7 @@ Agent 的强大不取决于 `while True` 循环写得多复杂，而取决于它
 
 为了避免硬编码，系统实现了**基于 Manifest（声明文件）的注册发现机制**：
 
-1. **AgentRegistry**: 负责扫描子代理（`subagents/*/AGENT.md`）。
+1. **AgentRegistry**: 负责扫描严格格式的子代理（`subagents/*/AGENT.yaml + prompt.md`）。
 2. **SkillRegistry**: 负责扫描技能方法卡（`skills/*/SKILL.md`）。
 
 ## Manifest 驱动发现
@@ -28,16 +28,22 @@ class ManifestBase:
     
     # 针对 Subagent 的执行配置
     execution: ManifestExecution  
-    # 包含：mode, model_role, tool_module, context_module, max_turns, timeout
+    # 包含：mode, model_role, max_turns, timeout
     
     tools: list[str]       # 该 Subagent 自己的工具列表
     memory: ManifestMemory # 该组件需要的 memory namespace
     domains: ManifestDomains
+    data: ManifestData
+    runtime_env: ManifestRuntimeEnv
     routing_hints: list[str] # 意图路由的触发词
     metadata: dict
 ```
 
-在系统启动时，这两个 Registry 会去读取对应目录下的 YAML + Markdown 混合文件。
+在系统启动时，这两个 Registry 会去读取对应目录下的配置文件。Subagent 固定采用
+`AGENT.yaml` 声明元数据，`prompt.md` 存放 worker prompt，`tools.py` 作为工具入口，
+可选 `context.py` 提供 prompt context。
+Subagent 可额外提供 `ENVIRONMENT.md` 说明本地测试环境、生产连接方式和所需环境变量；
+该文件只面向开发/运维，不进入模型上下文。
 
 ## AgentRegistry 与意图路由
 
@@ -65,7 +71,7 @@ class ManifestBase:
 3. **`memory_write`**：写入持久记忆。基于 `(namespace, key)` 自动 Upsert 更新。
 4. **`load_skill`**：按需加载 `SKILL.md` 的完整正文（方法卡），注入当前上下文。
 5. **`update_todo`**：会话内短时规划，一次只能有一个 `in_progress` 的任务。
-6. **动态 Worker 工具**：比如 `text2sql`。
+6. **动态 Worker 工具**：比如 `text2sql`、`rag`。
 
 ## Agent-as-Tool：用工具包裹 Agent
 
@@ -105,9 +111,12 @@ Orchestrator 以为自己只是调了一个普通的函数，但实际上这个�
 
 除了常规的 Prompt + Tool，系统还需要一些特定时机的介入。`HookRunner` 负责在生命周期关键节点执行扩展逻辑。
 
-目前主要实现了 **`SessionStart` Hook**：
-当开启一个新会话时，它会扫描所有的 Data Domains，偷偷调一次便宜的小模型，为用户生成针对当前业务数据的预设欢迎问题。
+当前支持 **`SessionStart`、`PreToolUse`、`PostToolUse`** 三个事件。
+`SessionStart` 只负责聚合欢迎内容，具体 preset questions 由 Bot 在
+`BOT.yaml` 里通过 `welcome` 配置声明；工具调用前后的 hook 则统一收到
+`tool_name`、`input`、`output/status` 等 payload，可用于审计、
+阻断或向模型返回注入信息。
 
 ## 一句话记住
 
-**工具系统的设计哲学是声明式发现 + 动态注入——AGENT.md/SKILL.md 声明能力，Registry 发现并注入到 prompt 或 tool list，Orchestrator 按需调用。**
+**工具系统的设计哲学是声明式发现 + 动态注入：`AGENT.yaml + prompt.md` / `SKILL.md` 声明能力，Registry 发现并注入到 prompt 或 tool list，Orchestrator 按需调用。**

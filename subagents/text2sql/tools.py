@@ -4,32 +4,44 @@ import os
 from typing import Any
 
 from agents import RunContextWrapper, function_tool
+from pydantic import BaseModel
 
 from agent_runtime.common import columns_from_rows
 from agent_runtime.core.context import RunContext
 from agent_runtime.core.events import EventKind
 from agent_runtime.core.tool_protocol import ToolOutput
-from agent_runtime.storage.database import validate_readonly_sql
+from agent_runtime.storage.database import DatabaseBackend
 from agent_runtime.core.runtime_utils import (
-    call_chat_model,
-    extract_sql,
     get_current_time_payload,
-    json_dumps,
-    make_async_client,
 )
 from agent_runtime.registry.skill_registry import AgentRegistry
-from subagents.text2sql.domain_registry import Text2SQLDomainRegistry
-from subagents.text2sql.planning import (
-    build_sql_plan_from_parts,
-    sql_plan_to_prompt,
+from subagents.text2sql.scripts.domain_catalog import (
+    Text2SQLDomainCatalog,
+    business_metrics_to_prompt,
+    domain_schema_payload,
+)
+from subagents.text2sql.scripts.sql_generation import generate_sql
+from subagents.text2sql.scripts.sql_safety import (
     validate_sql_uses_selected_schema,
 )
-from subagents.text2sql.prompts import SQL_GENERATION_PROMPT
 
 
 SQL_RESULT_SAMPLE_ROWS = int(os.getenv("SQL_RESULT_SAMPLE_ROWS", "50"))
 SQL_RESULT_STORE_MAX_ROWS = int(os.getenv("SQL_RESULT_STORE_MAX_ROWS", "1000"))
 SQL_RESULT_CELL_MAX_CHARS = int(os.getenv("SQL_RESULT_CELL_MAX_CHARS", "300"))
+TEXT2SQL_DATABASE_ENVIRONMENT_ERROR = (
+    "Text2SQL database environment is not prepared. Follow "
+    "subagents/text2sql/ENVIRONMENT.md, prepare or connect the database, "
+    "then restart runtime before calling Text2SQL tools."
+)
+
+
+class LinkedValueInput(BaseModel):
+    field: str
+    value: str
+    count: int | None = None
+    source: str = "search_domain_values"
+    query: str = ""
 
 
 def _emit_tool_start(
@@ -131,124 +143,263 @@ async def get_current_time(
 
 
 @function_tool
-async def plan_sql_query(
-    ctx: RunContextWrapper[RunContext],
-    question: str,
-    domain_name: str,
-    value_queries: list[str] | None = None,
-    correction_context: str = "",
-) -> str:
-    """Plan and generate one validated read-only SQL query for a data domain.
+async def list_domains(ctx: RunContextWrapper[RunContext]) -> str:
+    """List Text2SQL query domains available to this subagent.
 
-    Use this before execute_sql. Pick domain_name from the injected <domains>
-    context. Pass concrete entity/status/city/room/resource text as
-    value_queries so the planner can link real values before SQL generation.
-    If a prior execute_sql attempt failed, pass the error in correction_context
-    and plan once more.
-
-    Args:
-        question: User question with resolved dates and business intent.
-        domain_name: Text2SQL domain selected from <domains>.
-        value_queries: Concrete value snippets that should be linked against the domain.
-        correction_context: Error or correction note from one failed execution.
+    Use this when the injected <domains> context is insufficient or ambiguous.
+    It returns only lightweight table/domain summaries, not full schemas.
     """
     run_ctx = ctx.context
     _emit_tool_start(
         run_ctx,
-        tool_name="plan_sql_query",
-        input_payload={
-            "question": question,
-            "domain_name": domain_name,
-            "value_queries": value_queries or [],
-            "correction_context": correction_context,
-        },
+        tool_name="list_domains",
+        input_payload={},
     )
-    registry = _domain_registry_from_context(ctx)
     try:
-        domain = registry.get_domain(domain_name)
+        domains = [
+            {
+                "name": domain.name,
+                "description": domain.description,
+                "table": domain.table,
+            }
+            for domain in _domain_catalog_from_context(ctx).list_domains()
+        ]
+        payload = {"domains": domains, "error": ""}
     except Exception as exc:
         payload = {
-            "domain": "",
-            "sql_plan": {},
-            "sql": "",
-            "linked_values": [],
-            "validation_error": "",
-            "error": f"Invalid domain name: '{domain_name}'. {exc}",
-            "available_domains": [item.name for item in registry.list_domains()],
+            "domains": [],
+            "error": str(exc),
         }
-        tool_output = ToolOutput(
-            llm_content=payload,
-            ui_content=payload,
-            metadata={"tool_name": "plan_sql_query", "error": payload["error"]},
-        )
-        _emit_tool_finish(
-            run_ctx,
-            tool_name="plan_sql_query",
-            tool_output=tool_output,
-            status="failed",
-        )
-        return tool_output.to_llm_json()
-
-    schema_text = _activate_domain_context(run_ctx, domain)
-    linked_values: list[dict[str, Any]] = []
-    for raw_query in value_queries or []:
-        query = str(raw_query).strip()
-        if query:
-            linked_values.extend(_search_value_candidates(run_ctx, query))
-    linked_values.sort(key=lambda item: -int(item.get("count") or 0))
-    linked_values = linked_values[:40]
-
-    selected_columns = run_ctx.backend.get_columns(run_ctx.active_table)
-    plan = build_sql_plan_from_parts(
-        question=question,
-        domain=domain,
-        schema_text=schema_text,
-        selected_columns=selected_columns,
-        linked_values=linked_values,
-        constraints=correction_context,
-    )
     run_ctx.emit_subagent_trace(
         {
-            "stage": "sql_plan",
-            "title": "构建 SQLPlan",
-            "input": {
-                "question": question,
-                "domain_name": domain_name,
-                "value_queries": value_queries or [],
-                "correction_context": correction_context,
-            },
-            "output": plan.model_dump(),
+            "stage": "list_domains",
+            "title": "列出数据域",
+            "input": {},
+            "output": payload,
         }
     )
-    generated = await _generate_sql_from_plan(
-        run_ctx=run_ctx,
-        question=question,
-        schema_text=schema_text,
-        selected_columns=selected_columns,
-        plan_text=sql_plan_to_prompt(plan),
+    tool_output = ToolOutput(
+        llm_content=payload,
+        ui_content=payload,
+        metadata={"tool_name": "list_domains", "error": payload.get("error") or ""},
     )
-    payload = {
-        "domain": domain.name,
-        "sql_plan": plan.model_dump(),
-        "sql": generated["sql"],
-        "linked_values": linked_values,
-        "validation_error": generated["validation_error"],
-        "error": "",
-    }
+    _emit_tool_finish(
+        run_ctx,
+        tool_name="list_domains",
+        tool_output=tool_output,
+        status="failed" if tool_output.metadata.get("error") else "completed",
+    )
+    return tool_output.to_llm_json()
+
+
+@function_tool
+async def get_domain_schema(
+    ctx: RunContextWrapper[RunContext],
+    domain_name: str,
+) -> str:
+    """Load the real database schema for one Text2SQL domain.
+
+    Always call this before generating SQL. The tool activates the selected
+    domain/table in RunContext and returns schema, columns, text fields,
+    business metrics, and domain notes.
+
+    Args:
+        domain_name: Domain name selected from <domains> or list_domains.
+    """
+    run_ctx = ctx.context
+    _emit_tool_start(
+        run_ctx,
+        tool_name="get_domain_schema",
+        input_payload={"domain_name": domain_name},
+    )
+    try:
+        domain = _domain_catalog_from_context(ctx).get_domain(domain_name)
+        schema_text = _activate_domain_context(run_ctx, domain)
+        selected_columns = _require_backend(run_ctx).get_columns(domain.table)
+        payload = domain_schema_payload(
+            domain=domain,
+            schema_text=schema_text,
+            columns=selected_columns,
+        )
+    except Exception as exc:
+        payload = {
+            "domain": domain_name,
+            "description": "",
+            "table": "",
+            "schema": "",
+            "columns": [],
+            "text_fields": [],
+            "field_descriptions": {},
+            "business_metrics": [],
+            "notes": "",
+            "error": str(exc),
+        }
+    run_ctx.emit_subagent_trace(
+        {
+            "stage": "schema",
+            "title": f"加载 Domain Schema: {domain_name}",
+            "input": {"domain_name": domain_name},
+            "output": payload,
+        }
+    )
     tool_output = ToolOutput(
         llm_content=payload,
         ui_content=payload,
         metadata={
-            "tool_name": "plan_sql_query",
-            "domain": domain.name,
-            "error": generated["validation_error"],
+            "tool_name": "get_domain_schema",
+            "domain": payload.get("domain") or domain_name,
+            "table": payload.get("table") or "",
+            "error": payload.get("error") or "",
         },
     )
     _emit_tool_finish(
         run_ctx,
-        tool_name="plan_sql_query",
+        tool_name="get_domain_schema",
         tool_output=tool_output,
-        status="failed" if generated["validation_error"] else "completed",
+        status="failed" if tool_output.metadata.get("error") else "completed",
+    )
+    return tool_output.to_llm_json()
+
+
+@function_tool
+async def search_domain_values(
+    ctx: RunContextWrapper[RunContext],
+    domain_name: str,
+    query: str,
+    fields: list[str] | None = None,
+) -> str:
+    """Search real text values in a domain before generating SQL filters.
+
+    Use this when the user mentions concrete names, cities, statuses, rooms,
+    resource IDs, sea cable numbers, or similar text filters.
+
+    Args:
+        domain_name: Domain name selected from <domains> or list_domains.
+        query: User-provided literal snippet to link against real data values.
+        fields: Optional field list. Empty means the domain's text_fields.
+    """
+    run_ctx = ctx.context
+    input_payload = {"domain_name": domain_name, "query": query, "fields": fields or []}
+    _emit_tool_start(
+        run_ctx,
+        tool_name="search_domain_values",
+        input_payload=input_payload,
+    )
+    try:
+        domain = _domain_catalog_from_context(ctx).get_domain(domain_name)
+        if run_ctx.active_domain != domain.name or run_ctx.active_table != domain.table:
+            _activate_domain_context(run_ctx, domain)
+        linked_values = _search_value_candidates(run_ctx, query, fields)
+        payload = {
+            "domain": domain.name,
+            "query": query,
+            "linked_values": linked_values,
+            "error": "",
+        }
+    except Exception as exc:
+        payload = {
+            "domain": domain_name,
+            "query": query,
+            "linked_values": [],
+            "error": str(exc),
+        }
+    tool_output = ToolOutput(
+        llm_content=payload,
+        ui_content=payload,
+        metadata={
+            "tool_name": "search_domain_values",
+            "domain": payload.get("domain") or domain_name,
+            "error": payload.get("error") or "",
+        },
+    )
+    _emit_tool_finish(
+        run_ctx,
+        tool_name="search_domain_values",
+        tool_output=tool_output,
+        status="failed" if tool_output.metadata.get("error") else "completed",
+    )
+    return tool_output.to_llm_json()
+
+
+@function_tool
+async def generate_readonly_sql(
+    ctx: RunContextWrapper[RunContext],
+    question: str,
+    domain_name: str,
+    linked_values: list[LinkedValueInput] | None = None,
+    constraints: str = "",
+) -> str:
+    """Generate one validated read-only SQL statement for an activated domain.
+
+    Call get_domain_schema before this tool. Pass linked_values returned by
+    search_domain_values when text filters are involved. If execute_sql failed,
+    pass the error as constraints and retry at most once.
+
+    Args:
+        question: User question with resolved dates and business intent.
+        domain_name: Domain name selected from <domains> or list_domains.
+        linked_values: Optional linked values returned by search_domain_values.
+        constraints: Optional correction note from one failed execution.
+    """
+    run_ctx = ctx.context
+    linked_value_payloads = _linked_values_to_payload(linked_values)
+    input_payload = {
+        "question": question,
+        "domain_name": domain_name,
+        "linked_values": linked_value_payloads,
+        "constraints": constraints,
+    }
+    _emit_tool_start(
+        run_ctx,
+        tool_name="generate_readonly_sql",
+        input_payload=input_payload,
+    )
+    try:
+        domain = _domain_catalog_from_context(ctx).get_domain(domain_name)
+        schema_text = _activate_domain_context(run_ctx, domain)
+        selected_columns = _require_backend(run_ctx).get_columns(domain.table)
+        generated = await generate_sql(
+            run_ctx=run_ctx,
+            question=question,
+            domain=domain,
+            schema_text=schema_text,
+            selected_columns=selected_columns,
+            linked_values=linked_value_payloads,
+            constraints=constraints,
+        )
+        payload = {
+            "domain": domain.name,
+            "table": domain.table,
+            "sql": generated["sql"],
+            "linked_values": linked_value_payloads,
+            "business_metrics": business_metrics_to_prompt(domain.business_metrics),
+            "validation_error": generated["validation_error"],
+            "error": "",
+        }
+    except Exception as exc:
+        payload = {
+            "domain": domain_name,
+            "table": "",
+            "sql": "",
+            "linked_values": linked_value_payloads,
+            "business_metrics": [],
+            "validation_error": "",
+            "error": str(exc),
+        }
+    tool_output = ToolOutput(
+        llm_content=payload,
+        ui_content=payload,
+        metadata={
+            "tool_name": "generate_readonly_sql",
+            "domain": payload.get("domain") or domain_name,
+            "error": payload.get("error") or payload.get("validation_error") or "",
+        },
+    )
+    _emit_tool_finish(
+        run_ctx,
+        tool_name="generate_readonly_sql",
+        tool_output=tool_output,
+        status="failed" if tool_output.metadata.get("error") else "completed",
     )
     return tool_output.to_llm_json()
 
@@ -256,6 +407,7 @@ async def plan_sql_query(
 @function_tool
 async def execute_sql(
     ctx: RunContextWrapper[RunContext],
+    domain_name: str,
     sql: str,
 ) -> str:
     """Execute one validated read-only SQL statement and return result pointer or error.
@@ -267,6 +419,7 @@ async def execute_sql(
     for summarization.
 
     Args:
+        domain_name: Domain name used for schema validation.
         sql: SQL statement to execute.
     """
     run_ctx = ctx.context
@@ -275,17 +428,19 @@ async def execute_sql(
         payload={
             "stage": "tool_call_start",
             "tool_name": "execute_sql",
-            "input": {"sql": sql},
+            "input": {"domain_name": domain_name, "sql": sql},
         },
     )
     try:
-        if run_ctx.active_table:
-            validate_sql_uses_selected_schema(
-                sql,
-                selected_columns=run_ctx.backend.get_columns(run_ctx.active_table),
-                allowed_tables=[run_ctx.active_table],
-            )
-        fetched_rows = run_ctx.backend.execute_sql(
+        domain = _domain_catalog_from_context(ctx).get_domain(domain_name)
+        if run_ctx.active_domain != domain.name or run_ctx.active_table != domain.table:
+            _activate_domain_context(run_ctx, domain)
+        validate_sql_uses_selected_schema(
+            sql,
+            selected_columns=_require_backend(run_ctx).get_columns(domain.table),
+            allowed_tables=[domain.table],
+        )
+        fetched_rows = _require_backend(run_ctx).execute_sql(
             sql,
             max_rows=SQL_RESULT_STORE_MAX_ROWS + 1,
         )
@@ -317,7 +472,7 @@ async def execute_sql(
         {
             "stage": "execute",
             "title": "执行查询",
-            "input": sql,
+            "input": {"domain_name": domain_name, "sql": sql},
             "output": output,
         }
     )
@@ -377,11 +532,12 @@ async def execute_sql(
 
 
 def _activate_domain_context(run_ctx: RunContext, domain: Any) -> str:
+    backend = _require_backend(run_ctx)
     run_ctx.active_domain = domain.name
     run_ctx.active_table = domain.table
     run_ctx.active_text_fields = list(domain.text_fields)
     run_ctx.active_field_descriptions = dict(domain.field_descriptions)
-    schema_text = run_ctx.backend.get_schema_for_prompt(
+    schema_text = backend.get_schema_for_prompt(
         domain.table,
         domain.field_descriptions,
     )
@@ -405,14 +561,15 @@ def _search_value_candidates(
     query: str,
     field_list: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    selected_columns = set(run_ctx.backend.get_columns(run_ctx.active_table))
+    backend = _require_backend(run_ctx)
+    selected_columns = set(backend.get_columns(run_ctx.active_table))
     fields = [
         field for field in list(field_list or run_ctx.active_text_fields)
         if field in selected_columns
     ]
     results: list[dict[str, Any]] = []
     for field_name in fields:
-        for value, count in run_ctx.backend.search_distinct_values(
+        for value, count in backend.search_distinct_values(
             run_ctx.active_table,
             field_name,
             query,
@@ -433,84 +590,6 @@ def _search_value_candidates(
         }
     )
     return results
-
-
-async def _generate_sql_from_plan(
-    *,
-    run_ctx: RunContext,
-    question: str,
-    schema_text: str,
-    selected_columns: list[str],
-    plan_text: str,
-) -> dict[str, str]:
-    messages = [
-        {
-            "role": "system",
-            "content": SQL_GENERATION_PROMPT.format(dialect=run_ctx.backend.dialect),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"{schema_text}\n\n"
-                f"<sql_plan>\n{plan_text}\n</sql_plan>\n\n"
-                f"用户问题:\n{question}"
-            ),
-        },
-    ]
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "sql_prompt",
-            "title": "构建 SQL 提示词",
-            "input": messages,
-            "output": None,
-        }
-    )
-    profile = run_ctx.model_profiles["sql_worker"]
-    raw_output = await call_chat_model(
-        client=make_async_client(profile),
-        model_name=profile.model_name,
-        max_tokens=profile.max_tokens,
-        messages=messages,
-        title="SQL 生成模型调用",
-        kind="sql_model",
-        log_callback=lambda log: run_ctx.emit_payload(kind="model_call", payload=log),
-    )
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "sql_model_output",
-            "title": "SQL 模型推理",
-            "input": None,
-            "output": raw_output,
-        }
-    )
-    sql = extract_sql(raw_output)
-    validation_errors: list[str] = []
-    try:
-        validate_readonly_sql(sql)
-    except ValueError as exc:
-        validation_errors.append(str(exc))
-    try:
-        validate_sql_uses_selected_schema(
-            sql,
-            selected_columns=selected_columns,
-            allowed_tables=[run_ctx.active_table],
-        )
-    except ValueError as exc:
-        validation_errors.append(str(exc))
-    validation_error = "; ".join(validation_errors)
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "sql_extract",
-            "title": "提取 SQL",
-            "input": raw_output,
-            "output": {"sql": sql, "validation_error": validation_error},
-        }
-    )
-    return {
-        "sql": sql,
-        "raw_output": raw_output,
-        "validation_error": validation_error,
-    }
 
 
 def _build_execute_output(
@@ -590,6 +669,22 @@ def _compact_cell(value: Any) -> Any:
         return value
     return f"{text[:SQL_RESULT_CELL_MAX_CHARS].rstrip()}...[truncated {len(text)} chars]"
 
+
+def _linked_values_to_payload(
+    linked_values: list[LinkedValueInput] | None,
+) -> list[dict[str, Any]]:
+    if not linked_values:
+        return []
+    return [item.model_dump() for item in linked_values]
+
+
+def _require_backend(run_ctx: RunContext) -> DatabaseBackend:
+    backend = getattr(run_ctx, "backend", None)
+    if backend is None:
+        raise RuntimeError(TEXT2SQL_DATABASE_ENVIRONMENT_ERROR)
+    return backend
+
+
 def _registry_from_context(ctx: RunContextWrapper[RunContext]) -> AgentRegistry:
     registry = getattr(ctx.context, "agent_registry", None)
     if isinstance(registry, AgentRegistry):
@@ -597,6 +692,6 @@ def _registry_from_context(ctx: RunContextWrapper[RunContext]) -> AgentRegistry:
     raise RuntimeError("RunContext is missing AgentRegistry")
 
 
-def _domain_registry_from_context(ctx: RunContextWrapper[RunContext]) -> Text2SQLDomainRegistry:
+def _domain_catalog_from_context(ctx: RunContextWrapper[RunContext]) -> Text2SQLDomainCatalog:
     registry = _registry_from_context(ctx)
-    return Text2SQLDomainRegistry.from_agent(registry.get("text2sql"))
+    return Text2SQLDomainCatalog.from_agent(registry.get("text2sql"))

@@ -12,3 +12,28 @@ dependencies = [
     "streamlit>=1.42.0",
     "uvicorn>=0.46.0",
 ]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+agentweave-server = "agent_runtime.server.__main__:main"
+agentweave-prepare-text2sql = "subagents.text2sql.scripts.prepare_sqlite:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.uv]
+package = true
+
+[tool.setuptools.packages.find]
+include = [
+    "agent_runtime*",
+    "subagents*",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

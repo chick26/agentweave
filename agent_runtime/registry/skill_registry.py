@@ -14,8 +14,6 @@ class ManifestExecution:
     mode: str = "inline"
     worker_profile: str = ""
     model_role: str = ""
-    tool_module: str = ""
-    context_module: str = ""
     max_turns: int | None = None
     timeout_seconds: float | None = None
 
@@ -28,6 +26,21 @@ class ManifestMemory:
 @dataclass(frozen=True)
 class ManifestDomains:
     root: str = ""
+    file: str = ""
+
+
+@dataclass(frozen=True)
+class ManifestData:
+    roots: list[str] = field(default_factory=list)
+    globs: list[str] = field(default_factory=list)
+    tables: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ManifestRuntimeEnv:
+    kind: str = ""
+    setup_module: str = ""
+    mode: str = "lazy"
 
 
 @dataclass(frozen=True)
@@ -41,6 +54,8 @@ class ManifestBase:
     tools: list[str] = field(default_factory=list)
     memory: ManifestMemory = field(default_factory=ManifestMemory)
     domains: ManifestDomains = field(default_factory=ManifestDomains)
+    data: ManifestData = field(default_factory=ManifestData)
+    runtime_env: ManifestRuntimeEnv = field(default_factory=ManifestRuntimeEnv)
     routing_hints: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -56,7 +71,7 @@ class Skill(ManifestBase):
 
 @dataclass(frozen=True)
 class AgentManifest(ManifestBase):
-    """A delegated subagent manifest under subagents/*/AGENT.md."""
+    """A delegated subagent manifest under subagents/*/AGENT.yaml."""
 
 
 ManifestT = TypeVar("ManifestT", bound=ManifestBase)
@@ -111,8 +126,11 @@ class SkillRegistry:
                 return skill
         raise ValueError(f"Unknown skill: {name}")
 
-    def format_catalog_for_prompt(self) -> str:
+    def format_catalog_for_prompt(self, names: list[str] | None = None) -> str:
         skills = self.discover()
+        if names is not None:
+            allowed = set(names)
+            skills = [skill for skill in skills if skill.name in allowed]
         if not skills:
             return "<skills_catalog></skills_catalog>"
         lines = ["<skills_catalog>"]
@@ -129,7 +147,7 @@ class SkillRegistry:
 
 
 class AgentRegistry:
-    """Discover delegated subagents only from subagents/*/AGENT.md."""
+    """Discover delegated subagents from the strict subagents/* package contract."""
 
     def __init__(self, *, subagents_root: Path) -> None:
         self.subagents_root = subagents_root
@@ -137,8 +155,8 @@ class AgentRegistry:
         self._cache: list[AgentManifest] | None = None
 
     def discover(self) -> list[AgentManifest]:
-        paths = _manifest_paths(self.subagents_root, "AGENT")
-        signature = file_signature(paths)
+        paths = _subagent_manifest_paths(self.subagents_root)
+        signature = file_signature(_subagent_signature_paths(self.subagents_root))
         if self._cache is not None and self._cache_signature == signature:
             return list(self._cache)
         if not paths:
@@ -147,22 +165,13 @@ class AgentRegistry:
             return []
         manifests: list[AgentManifest] = []
         for path in paths:
-            if path.suffix == ".md":
-                manifests.append(
-                    _read_markdown_manifest(
-                        path,
-                        manifest_cls=AgentManifest,
-                        kind="subagent",
-                    )
+            manifests.append(
+                _read_yaml_manifest(
+                    path,
+                    manifest_cls=AgentManifest,
+                    kind="subagent",
                 )
-            else:
-                manifests.append(
-                    _read_yaml_manifest(
-                        path,
-                        manifest_cls=AgentManifest,
-                        kind="subagent",
-                    )
-                )
+            )
         self._cache = manifests
         self._cache_signature = signature
         return list(manifests)
@@ -177,8 +186,11 @@ class AgentRegistry:
                 return manifest
         raise ValueError(f"Unknown subagent: {name}")
 
-    def format_routing_for_prompt(self) -> str:
+    def format_routing_for_prompt(self, names: list[str] | None = None) -> str:
         subagents = self.discover()
+        if names is not None:
+            allowed = set(names)
+            subagents = [subagent for subagent in subagents if subagent.name in allowed]
         if not subagents:
             return "<subagents_routing></subagents_routing>"
         lines = ["<subagents_routing>"]
@@ -202,6 +214,8 @@ class AgentRegistry:
 SkillExecution = ManifestExecution
 SkillMemory = ManifestMemory
 SkillDomains = ManifestDomains
+SkillData = ManifestData
+SkillRuntimeEnv = ManifestRuntimeEnv
 
 
 def _read_yaml_manifest(
@@ -211,14 +225,21 @@ def _read_yaml_manifest(
     kind: str,
 ) -> ManifestT:
     metadata = _read_yaml_file(path)
-    return _build_manifest_from_metadata(
+    body = ""
+    prompt_path = path.parent / "prompt.md"
+    if kind == "subagent" and prompt_path.exists():
+        body = prompt_path.read_text(encoding="utf-8").strip()
+    manifest = _build_manifest_from_metadata(
         metadata=metadata,
         location=path,
-        body="",
+        body=body,
         default_name=path.parent.name,
         manifest_cls=manifest_cls,
         kind=kind,
     )
+    if kind == "subagent":
+        _validate_subagent_contract(manifest)
+    return manifest
 
 
 def _read_markdown_manifest(
@@ -251,10 +272,14 @@ def _build_manifest_from_metadata(
     execution = metadata.get("execution") if isinstance(metadata.get("execution"), dict) else {}
     memory = metadata.get("memory") if isinstance(metadata.get("memory"), dict) else {}
     domains = metadata.get("domains") if isinstance(metadata.get("domains"), dict) else {}
+    data = metadata.get("data") if isinstance(metadata.get("data"), dict) else {}
+    runtime_env = (
+        metadata.get("runtime_env") if isinstance(metadata.get("runtime_env"), dict) else {}
+    )
     execution_mode = str(execution.get("mode", "inline"))
-    model_role = str(execution.get("model_role", ""))
+    model_role = str(execution.get("model_role") or "")
     if kind == "subagent" and execution_mode == "worker" and not model_role:
-        raise ValueError(f"Worker subagent {location} is missing execution.model_role")
+        model_role = "orchestrator"
     return manifest_cls(
         name=str(metadata.get("name") or default_name),
         description=str(metadata.get("description", "")),
@@ -265,14 +290,25 @@ def _build_manifest_from_metadata(
             mode=execution_mode,
             worker_profile=str(execution.get("worker_profile", "")),
             model_role=model_role,
-            tool_module=str(execution.get("tool_module", "")),
-            context_module=str(execution.get("context_module", "")),
             max_turns=_optional_int(execution.get("max_turns")),
             timeout_seconds=_optional_float(execution.get("timeout_seconds")),
         ),
         tools=_as_str_list(metadata.get("tools", [])),
         memory=ManifestMemory(namespaces=_as_str_list(memory.get("namespaces", []))),
-        domains=ManifestDomains(root=str(domains.get("root", ""))),
+        domains=ManifestDomains(
+            root=str(domains.get("root", "")),
+            file=str(domains.get("file", "")),
+        ),
+        data=ManifestData(
+            roots=_as_str_list(data.get("roots", [])),
+            globs=_as_str_list(data.get("globs", [])),
+            tables=_as_str_dict(data.get("tables", {})),
+        ),
+        runtime_env=ManifestRuntimeEnv(
+            kind=str(runtime_env.get("kind", "")),
+            setup_module=str(runtime_env.get("setup_module", "")),
+            mode=str(runtime_env.get("mode", "lazy")),
+        ),
         routing_hints=_as_str_list(metadata.get("routing_hints", [])),
         metadata=metadata,
     )
@@ -294,6 +330,35 @@ def _as_str_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
     return []
+
+
+def _as_str_dict(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): str(item) for key, item in value.items()}
+
+
+def _validate_subagent_contract(manifest: ManifestBase) -> None:
+    root = manifest.location.parent
+    if manifest.location.name != "AGENT.yaml":
+        raise ValueError(f"Subagent `{manifest.name}` must use AGENT.yaml.")
+    if not manifest.body.strip():
+        raise ValueError(f"Subagent `{manifest.name}` must provide prompt.md.")
+    if manifest.execution.mode != "worker":
+        raise ValueError(f"Subagent `{manifest.name}` must set execution.mode: worker.")
+    execution = manifest.metadata.get("execution")
+    execution = execution if isinstance(execution, dict) else {}
+    if "tool_module" in execution or "context_module" in execution:
+        raise ValueError(
+            f"Subagent `{manifest.name}` must use convention paths; "
+            "execution.tool_module/context_module are not allowed."
+        )
+    if manifest.tools and not (root / "tools.py").exists():
+        raise ValueError(f"Subagent `{manifest.name}` declares tools but tools.py is missing.")
+    if manifest.runtime_env.kind and not (root / "ENVIRONMENT.md").exists():
+        raise ValueError(
+            f"Subagent `{manifest.name}` declares runtime_env but ENVIRONMENT.md is missing."
+        )
 
 
 def _optional_int(value: Any) -> int | None:
@@ -321,10 +386,47 @@ def _manifest_paths(root: Path, basename: str) -> list[Path]:
     for item_dir in sorted(root.iterdir()):
         if not item_dir.is_dir():
             continue
-        md_path = item_dir / f"{basename}.md"
         yaml_path = item_dir / f"{basename}.yaml"
-        if md_path.exists():
-            paths.append(md_path)
-        elif yaml_path.exists():
+        yml_path = item_dir / f"{basename}.yml"
+        md_path = item_dir / f"{basename}.md"
+        if yaml_path.exists():
             paths.append(yaml_path)
+        elif yml_path.exists():
+            paths.append(yml_path)
+        elif md_path.exists():
+            paths.append(md_path)
+    return paths
+
+
+def _subagent_manifest_paths(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    paths: list[Path] = []
+    for item_dir in sorted(root.iterdir()):
+        if not item_dir.is_dir():
+            continue
+        yaml_path = item_dir / "AGENT.yaml"
+        if yaml_path.exists():
+            paths.append(yaml_path)
+    return paths
+
+
+def _subagent_signature_paths(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    paths: list[Path] = []
+    for item_dir in sorted(root.iterdir()):
+        if not item_dir.is_dir():
+            continue
+        for filename in [
+            "AGENT.yaml",
+            "prompt.md",
+            "tools.py",
+            "context.py",
+            "ENVIRONMENT.md",
+            "domain_catalog.yaml",
+        ]:
+            path = item_dir / filename
+            if path.exists():
+                paths.append(path)
     return paths

@@ -1,0 +1,28 @@
+id: data_analyst
+name: 数据分析机器人
+description: 结构化数据查询、分析和报告总结。
+instructions: |
+  你是数据分析机器人。先通过 subagent 获取事实，再按 skill 方法总结。
+subagents:
+  - text2sql
+  - rag
+skills:
+  - data_analysis
+welcome:
+  mode: static
+  preset_questions:
+    - domain_name: idc_resources
+      title: IDC 资源
+      questions:
+        - 403机房有多少可用机柜？
+        - 各机房可用机柜数量排行是什么？
+    - domain_name: sea_cable_faults
+      title: 海缆故障
+      questions:
+        - 最近有哪些海缆故障影响城市？
+        - 按故障段统计海缆故障数量。
+    - domain_name: rag
+      title: PDF 知识库
+      questions:
+        - 这份 PDF 主要讲了什么？
+        - 查找文档中和论坛资料相关的关键信息。

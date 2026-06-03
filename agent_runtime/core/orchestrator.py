@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -20,7 +21,13 @@ from agent_runtime.core.context import OrchestratorContext
 from agent_runtime.core.events import EventKind
 from agent_runtime.storage.database import CsvSQLiteBackend, DatabaseBackend
 from agent_runtime.memory.embeddings import EmbeddingClient, load_embedding_profile
-from agent_runtime.core.hooks import HookResult, HookRunner, SessionStartContext
+from agent_runtime.core.hooks import (
+    HOOK_BLOCK,
+    HOOK_INJECT,
+    HookResult,
+    HookRunner,
+    SessionStartContext,
+)
 from agent_runtime.memory.memory_manager import MemoryManager, TodoItem
 from agent_runtime.memory.memory_store import MemoryStore
 from agent_runtime.core.prompts import (
@@ -36,11 +43,12 @@ from agent_runtime.core.runtime_utils import (
     json_dumps,
     to_jsonable,
 )
-from agent_runtime.core.settings import build_model_profiles
+from agent_runtime.core.settings import build_model_profiles, load_database_backend
 from agent_runtime.core.tool_protocol import ToolOutput
+from agent_runtime.registry.bot_registry import BotConfig, BotRegistry
 from agent_runtime.registry.resources import ResourceLoader
 from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
-from agent_runtime.core.skill_runner import SubagentRunner
+from agent_runtime.core.subagent_runner import SubagentRunner
 from pydantic import BaseModel
 
 from agent_runtime.common import env_bool
@@ -92,11 +100,6 @@ class AgentRuntime:
         timezone_name: str | None = None,
     ) -> None:
         set_tracing_disabled(True)
-        if backend is None:
-            if tables is None:
-                raise ValueError("Either backend or tables must be provided.")
-            backend = CsvSQLiteBackend(tables)
-        self.backend = backend
         self.session_db_path = session_db_path
         session_root = session_db_path.resolve().parent
         self.root = (
@@ -104,22 +107,34 @@ class AgentRuntime:
             if (session_root / "skills").exists() or (session_root / "subagents").exists()
             else Path.cwd().resolve()
         )
+        self.skill_registry = SkillRegistry(skills_root=self.root / "skills")
+        self.agent_registry = AgentRegistry(subagents_root=self.root / "subagents")
+        if backend is None:
+            if tables is not None:
+                backend = CsvSQLiteBackend(tables)
+            elif os.getenv("TEXT2SQL_BACKEND", "").strip():
+                backend = load_database_backend(self.root)
+        self.backend = backend
         self.timezone_name = timezone_name or os.getenv("TEXT2SQL_TIMEZONE", "Asia/Hong_Kong")
         self.model_profiles = build_model_profiles(
             base_url=base_url,
             model_name=model_name,
             api_key=api_key,
             max_tokens=max_tokens,
-            sql_base_url=sql_base_url or base_url,
-            sql_model_name=sql_model_name or model_name,
+            sql_base_url=sql_base_url,
+            sql_model_name=sql_model_name,
             sql_max_tokens=sql_max_tokens,
         )
-        self.skill_registry = SkillRegistry(skills_root=self.root / "skills")
-        self.agent_registry = AgentRegistry(subagents_root=self.root / "subagents")
+        self.bot_registry = BotRegistry(
+            bots_root=self.root / "bots",
+            agent_registry=self.agent_registry,
+            skill_registry=self.skill_registry,
+        )
         self.resource_loader = ResourceLoader(
             root=self.root,
             skill_registry=self.skill_registry,
             agent_registry=self.agent_registry,
+            bot_registry=self.bot_registry,
         )
         self.memory_store = MemoryStore(self.root / "agent_memory.sqlite")
         self.memory_enabled = (
@@ -160,11 +175,13 @@ class AgentRuntime:
         event_callback: Callable[[dict[str, Any]], None] | None = None,
         model_delta_callback: Callable[[dict[str, Any]], None] | None = None,
         max_turns: int = 10,
+        bot_id: str = "default",
     ) -> dict[str, Any]:
         local_model_logs: list[dict[str, Any]] = []
         def log_callback(log_entry: dict[str, Any]) -> None:
             local_model_logs.append(to_jsonable(log_entry))
 
+        bot = self.bot_registry.get(bot_id)
         context = OrchestratorContext(
             session_id=session_id,
             backend=self.backend,
@@ -184,7 +201,7 @@ class AgentRuntime:
             prior_messages,
             session_id=session_id,
             memory_manager=self.memory_manager,
-            model_profile=self.model_profiles["sql_worker"],
+            model_profile=self.model_profiles["executor"],
         )
         if compressed_messages != prior_messages:
             await session.clear_session()
@@ -206,6 +223,7 @@ class AgentRuntime:
                 session_id,
                 current_query=user_input,
                 context=context,
+                bot=bot,
             ),
             model=build_model(
                 profile=profile,
@@ -214,7 +232,7 @@ class AgentRuntime:
                 kind="orchestration_model",
             ),
             model_settings=ModelSettings(max_tokens=profile.max_tokens),
-            tools=self._build_tools(),
+            tools=self._build_tools(bot=bot),
         )
 
         try:
@@ -290,10 +308,12 @@ class AgentRuntime:
         *,
         current_query: str = "",
         context: OrchestratorContext | None = None,
+        bot: BotConfig | None = None,
     ) -> str:
+        bot = bot or self.bot_registry.get("default")
         parts = [
             SYSTEM_PROMPT.format(
-                skills_section=self._build_skills_section(),
+                skills_section=self._build_skills_section(bot=bot),
                 memory_role_policy=MEMORY_ROLE_POLICY if self.memory_enabled else "",
                 memory_tool_policy=MEMORY_TOOL_POLICY if self.memory_enabled else "",
                 memory_policy_section=MEMORY_POLICY_SECTION if self.memory_enabled else "",
@@ -320,16 +340,21 @@ class AgentRuntime:
             parts.append(f"用户偏好:\n{user_memory}")
         if project_rules:
             parts.append(f"项目规则:\n{project_rules}")
+        if bot.instructions:
+            parts.append(f"Bot 指令:\n{bot.instructions}")
         if memory_context:
             parts.append(f"<memory_context>\n{memory_context}\n</memory_context>")
         return "\n\n".join(parts)
 
-    def _build_skills_section(self) -> str:
-        return self.resource_loader.format_for_prompt()
+    def _build_skills_section(self, *, bot: BotConfig | None = None) -> str:
+        return self.resource_loader.format_for_bot(bot or self.bot_registry.get("default"))
 
-    def _build_subagent_agent_tools(self) -> list[Any]:
+    def _build_subagent_agent_tools(self, *, bot: BotConfig) -> list[Any]:
         tools = []
+        allowed = set(bot.subagents)
         for manifest in self.agent_registry.discover():
+            if manifest.name not in allowed:
+                continue
             if manifest.execution.mode != "worker":
                 continue
             model_role = self.subagent_runner._resolve_model_role(manifest)
@@ -353,6 +378,15 @@ class AgentRuntime:
     def reload_resources(self) -> dict[str, Any]:
         return self.resource_loader.reload()
 
+    def list_capabilities(self) -> dict[str, Any]:
+        return self.resource_loader.capabilities_payload()
+
+    def list_bots(self) -> list[dict[str, Any]]:
+        return self.bot_registry.list_summaries()
+
+    def get_bot(self, bot_id: str) -> dict[str, Any]:
+        return self.resource_loader.bot_payload(bot_id)
+
     def run_session_start_hook(
         self,
         *,
@@ -361,7 +395,9 @@ class AgentRuntime:
         model_name: str,
         api_key: str,
         questions_per_domain: int,
+        bot_id: str = "default",
     ) -> HookResult:
+        bot = self.bot_registry.get(bot_id)
         return self.hook_runner.run(
             "SessionStart",
             SessionStartContext(
@@ -372,11 +408,17 @@ class AgentRuntime:
                 api_key=api_key,
                 questions_per_domain=questions_per_domain,
                 memory_context=self.memory_manager.build_orchestrator_context(session_id),
+                subagent_names=bot.subagents,
+                welcome_mode=bot.welcome.mode,
+                welcome_provider_module=bot.welcome.provider_module,
+                preset_question_groups=bot.welcome.preset_questions,
             ),
         )
 
-    def _build_tools(self) -> list[Any]:
+    def _build_tools(self, *, bot: BotConfig | None = None) -> list[Any]:
         runtime = self
+        bot = bot or self.bot_registry.get("default")
+        allowed_skills = set(bot.skills)
 
         def emit_tool_start(
             context: OrchestratorContext,
@@ -427,6 +469,88 @@ class AgentRuntime:
                 },
                 error=error,
             )
+
+        def wrap_tool_hooks(tool: Any) -> Any:
+            original_invoke = getattr(tool, "on_invoke_tool", None)
+            if original_invoke is None or getattr(tool, "_agentweave_hooks_wrapped", False):
+                return tool
+            tool_name = str(getattr(tool, "name", ""))
+
+            async def invoke_with_hooks(ctx: Any, input_json: str) -> str:
+                parent_context = getattr(ctx, "context", None)
+                if not isinstance(parent_context, OrchestratorContext):
+                    return await original_invoke(ctx, input_json)
+                input_payload = _parse_tool_input_payload(input_json)
+                pre = runtime.hook_runner.run(
+                    "PreToolUse",
+                    {
+                        "tool_name": tool_name,
+                        "input": input_payload,
+                        "session_id": parent_context.session_id,
+                        "run_id": parent_context.session_id,
+                    },
+                )
+                if pre.exit_code == HOOK_BLOCK:
+                    emit_tool_start(
+                        parent_context,
+                        tool_name=tool_name,
+                        input_payload=input_payload,
+                    )
+                    blocked_output = _blocked_tool_output(tool_name, pre)
+                    emit_tool_finish(
+                        parent_context,
+                        tool_name=tool_name,
+                        output=blocked_output,
+                        status="blocked",
+                    )
+                    return blocked_output.to_llm_json()
+
+                status = "completed"
+                try:
+                    output_text = await original_invoke(ctx, input_json)
+                except Exception as exc:
+                    status = "failed"
+                    runtime.hook_runner.run(
+                        "PostToolUse",
+                        {
+                            "tool_name": tool_name,
+                            "input": input_payload,
+                            "output": {"error": f"{type(exc).__name__}: {exc}"},
+                            "status": status,
+                            "session_id": parent_context.session_id,
+                            "run_id": parent_context.session_id,
+                        },
+                    )
+                    raise
+
+                post = runtime.hook_runner.run(
+                    "PostToolUse",
+                    {
+                        "tool_name": tool_name,
+                        "input": input_payload,
+                        "output": _parse_tool_output_payload(output_text),
+                        "status": status,
+                        "session_id": parent_context.session_id,
+                        "run_id": parent_context.session_id,
+                    },
+                )
+                if pre.exit_code == HOOK_INJECT and pre.message:
+                    output_text = _inject_hook_message(
+                        output_text,
+                        source="pre_tool_use",
+                        message=pre.message,
+                    )
+                if post.exit_code == HOOK_INJECT and post.message:
+                    output_text = _inject_hook_message(
+                        output_text,
+                        source="post_tool_use",
+                        message=post.message,
+                    )
+                return output_text
+
+            tool.on_invoke_tool = invoke_with_hooks
+            setattr(tool, "_agentweave_hooks_wrapped", True)
+            return tool
 
         @function_tool
         async def get_current_time(
@@ -609,6 +733,8 @@ class AgentRuntime:
                 input_payload={"skill_name": skill_name},
             )
             try:
+                if skill_name not in allowed_skills:
+                    raise ValueError(f"Skill `{skill_name}` is not enabled for bot `{bot.id}`.")
                 skill = runtime.skill_registry.get(skill_name)
                 payload = {
                     "name": skill.name,
@@ -620,7 +746,9 @@ class AgentRuntime:
                 payload = {
                     "error": str(exc),
                     "available_skills": [
-                        skill.name for skill in runtime.skill_registry.discover()
+                        skill.name
+                        for skill in runtime.skill_registry.discover()
+                        if skill.name in allowed_skills
                     ],
                 }
             ctx.context.emit_payload(
@@ -708,11 +836,11 @@ class AgentRuntime:
             get_current_time,
             load_skill,
             update_todo,
-            *runtime._build_subagent_agent_tools(),
+            *runtime._build_subagent_agent_tools(bot=bot),
         ]
         if runtime.memory_enabled:
             tools[1:1] = [memory_search, memory_write]
-        return tools
+        return [wrap_tool_hooks(tool) for tool in tools]
 
 
 def _subagent_trace(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -739,3 +867,47 @@ def _read_optional_path(path: Path) -> str:
     if not path.exists() or not path.is_file():
         return ""
     return path.read_text(encoding="utf-8", errors="replace").strip()
+
+
+def _parse_tool_input_payload(input_json: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(input_json)
+    except json.JSONDecodeError:
+        return {"input": input_json}
+    if isinstance(payload, dict):
+        return payload
+    return {"input": payload}
+
+
+def _parse_tool_output_payload(output_text: str) -> Any:
+    try:
+        return json.loads(output_text)
+    except (TypeError, json.JSONDecodeError):
+        return output_text
+
+
+def _blocked_tool_output(tool_name: str, result: HookResult) -> ToolOutput:
+    payload = {
+        "blocked": True,
+        "error": result.message or result.error or "Tool call blocked by hook.",
+        "hook": result.payload,
+    }
+    return ToolOutput(
+        llm_content=payload,
+        ui_content=payload,
+        metadata={
+            "tool_name": tool_name,
+            "error": payload["error"],
+            "hook_exit_code": result.exit_code,
+        },
+    )
+
+
+def _inject_hook_message(output_text: str, *, source: str, message: str) -> str:
+    payload = _parse_tool_output_payload(output_text)
+    injection = {"source": source, "message": message}
+    if isinstance(payload, dict):
+        payload = {**payload, "hook_injection": injection}
+    else:
+        payload = {"tool_output": payload, "hook_injection": injection}
+    return json_dumps(payload)

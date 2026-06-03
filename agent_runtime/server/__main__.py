@@ -5,15 +5,13 @@ from pathlib import Path
 
 import uvicorn
 
-from agent_runtime.common import load_env_file
+from agent_runtime.common import load_runtime_env_files
 from agent_runtime.server.app import create_app
 
 
 def main() -> None:
     root = Path.cwd().resolve()
-    env_path = root / ".env"
-    if env_path.exists():
-        load_env_file(env_path)
+    load_runtime_env_files(root)
     host = os.getenv("AGENTWEAVE_SERVER_HOST", "127.0.0.1")
     port = int(os.getenv("AGENTWEAVE_SERVER_PORT", "8765"))
     token = os.getenv("AGENTWEAVE_SERVER_TOKEN", "")

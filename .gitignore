@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
 .pytest_cache/
 
 .DS_Store
@@ -13,6 +14,10 @@ __pycache__/
 data/*
 !data/.gitkeep
 !data/README.md
+
+subagents/*/data/*
+!subagents/*/data/.gitkeep
+!subagents/*/data/README.md
 
 docs/iterations/
 
@@ -35,3 +40,4 @@ agent_results.sqlite
 scratch_ask.py
 scratch_sessions.sqlite
 .streamlit/
+.agentweave/
