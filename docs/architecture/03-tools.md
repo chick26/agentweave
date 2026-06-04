@@ -34,14 +34,14 @@ class ManifestBase:
     memory: ManifestMemory # 该组件需要的 memory namespace
     domains: ManifestDomains
     data: ManifestData
-    runtime_env: ManifestRuntimeEnv
+    extension: ManifestExtension
     routing_hints: list[str] # 意图路由的触发词
     metadata: dict
 ```
 
 在系统启动时，这两个 Registry 会去读取对应目录下的配置文件。Subagent 固定采用
-`AGENT.yaml` 声明元数据，`prompt.md` 存放 worker prompt，`tools.py` 作为工具入口，
-可选 `context.py` 提供 prompt context。
+`AGENT.yaml` 声明元数据，`prompt.md` 存放 worker prompt，`extension.py register(api)`
+作为工具、环境检查和 prompt context 的标准入口。`tools.py` 只用于显式声明的自定义补充工具。
 Subagent 可额外提供 `ENVIRONMENT.md` 说明本地测试环境、生产连接方式和所需环境变量；
 该文件只面向开发/运维，不进入模型上下文。
 

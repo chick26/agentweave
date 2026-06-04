@@ -98,6 +98,13 @@ def load_runtime_env_files(root: Path) -> list[Path]:
     return loaded
 
 
+def agentweave_data_dir(root: Path) -> Path:
+    """Return the local runtime data directory for SQLite/env artifacts."""
+    path = root / ".agentweave"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def columns_from_rows(rows: list[dict[str, Any]]) -> list[str]:
     columns: list[str] = []
     seen: set[str] = set()

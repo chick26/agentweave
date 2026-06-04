@@ -30,25 +30,10 @@ name: text2sql
 description: 使用自然语言查询结构化数据，生成并执行只读 SQL。
 execution:
   mode: worker
-runtime_env:
-  kind: local
-  setup_module: subagents.text2sql.env
-  mode: manual
-tools:
-  - get_current_time
-  - list_domains
-  - get_domain_schema
-  - search_domain_values
-  - generate_readonly_sql
-  - execute_sql
+extension:
+  module: subagents.text2sql.extension
 domains:
   file: domain_catalog.yaml
-data:
-  roots: [subagents/text2sql/data]
-  globs: ["*.csv"]
-  tables:
-    resources: resources.csv
-    sea_cable_faults: sea_cable_faults.csv
 ```
 
 `domain_catalog.yaml` 是 Text2SQL 私有表目录。它集中描述所有可查询表的 domain 名称、表名、文本字段、字段说明、业务指标和 notes。它不是主框架概念。
@@ -57,7 +42,7 @@ data:
 
 模型不是自动知道所有 schema。
 
-1. `context.py` 从 `domain_catalog.yaml` 注入轻量 `<domains>` 摘要，只包含 domain 名称、描述和表名。
+1. `extension.py` 通过 `api.prompt_context(...)` 从 `domain_catalog.yaml` 注入轻量 `<domains>` 摘要，只包含 domain 名称、描述和表名。
 2. worker 模型根据用户问题选择 `domain_name`。
 3. worker 必须显式调用 `get_domain_schema(domain_name)`。
 4. 工具根据 catalog 找到 table，并从已连接数据库读取真实 schema。

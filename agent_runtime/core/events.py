@@ -27,9 +27,6 @@ class EventKind(str, Enum):
     SKILL_EVENT = "skill_event"
     RESULT_CREATED = "result_created"
     RESOURCES_RELOADED = "resources_reloaded"
-    SESSION_FORKED = "session_forked"
-    SESSION_TEMPLATE_STARTED = "session_template_started"
-    SESSION_TEMPLATE_SAVED = "session_template_saved"
     ERROR = "error"
 
 

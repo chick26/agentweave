@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from agents.tool_context import ToolContext
 
 from agent_runtime.core.context import OrchestratorContext, RunContext
@@ -20,6 +21,81 @@ def _text2sql_test_backend() -> CsvSQLiteBackend:
             "sea_cable_faults": Path("subagents/text2sql/data/sea_cable_faults.csv"),
         }
     )
+
+
+def test_runtime_local_sqlite_stores_live_under_agentweave(tmp_path):
+    (tmp_path / "subagents").mkdir()
+    (tmp_path / "skills").mkdir()
+    session_path = tmp_path / ".agentweave" / "streamlit_sessions.sqlite"
+
+    runtime = AgentRuntime(
+        backend=_text2sql_test_backend(),
+        base_url="http://example.test/v1",
+        model_name="orchestrator",
+        api_key="not-needed",
+        session_db_path=session_path,
+        memory_enabled=False,
+    )
+
+    assert runtime.root == tmp_path
+    assert runtime.memory_store.path == tmp_path / ".agentweave" / "agent_memory.sqlite"
+    assert runtime.result_store.path == tmp_path / ".agentweave" / "agent_results.sqlite"
+
+
+def test_runtime_readiness_checks_only_selected_bot_subagents(tmp_path, monkeypatch):
+    subagents_root = tmp_path / "subagents"
+    bots_root = tmp_path / "bots"
+    healthy_dir = subagents_root / "healthy"
+    broken_dir = subagents_root / "broken"
+    healthy_dir.mkdir(parents=True)
+    broken_dir.mkdir(parents=True)
+    (healthy_dir / "extension.py").write_text(
+        "def validate(manifest):\n"
+        "    return None\n\n"
+        "def register(api):\n"
+        "    api.validate_environment(validate)\n",
+        encoding="utf-8",
+    )
+    (broken_dir / "extension.py").write_text(
+        "def validate(manifest):\n"
+        "    raise RuntimeError('missing env')\n\n"
+        "def register(api):\n"
+        "    api.validate_environment(validate)\n",
+        encoding="utf-8",
+    )
+    for name in ("healthy", "broken"):
+        (subagents_root / name / "AGENT.yaml").write_text(
+            f"name: {name}\n"
+            f"description: {name} worker\n"
+            "execution:\n"
+            "  mode: worker\n"
+            "extension:\n"
+            f"  module: subagents.{name}.extension\n",
+            encoding="utf-8",
+        )
+        (subagents_root / name / "prompt.md").write_text("Prompt\n", encoding="utf-8")
+    bot_dir = bots_root / "healthy_bot"
+    bot_dir.mkdir(parents=True)
+    (bot_dir / "BOT.yaml").write_text(
+        "id: healthy_bot\n"
+        "name: Healthy Bot\n"
+        "subagents:\n"
+        "  - healthy\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    runtime = AgentRuntime(
+        base_url="http://example.test/v1",
+        model_name="orchestrator",
+        api_key="not-needed",
+        session_db_path=tmp_path / "sessions.sqlite",
+        validate_subagents=True,
+    )
+
+    runtime._validate_bot_subagents_readiness("healthy_bot")
+
+    with pytest.raises(RuntimeError, match="broken.*missing env"):
+        runtime._validate_bot_subagents_readiness("default")
 
 
 def test_orchestrator_exposes_only_runtime_tools():

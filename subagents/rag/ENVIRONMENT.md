@@ -1,55 +1,47 @@
 # RAG Local Environment
 
-RAG is packaged as a self-contained subagent. The framework only loads the
-manifest, prompt, and tools; PDF parsing, chunking, embedding calls, and
-retrieval stay inside this package.
+RAG uses prepared Markdown knowledge files. The runtime reads a local knowledge
+index during question answering.
 
-## Local PDF Mode
+## Startup Order
 
-Default local mode reads PDFs declared in `AGENT.yaml`:
-
-```yaml
-data:
-  roots:
-    - subagents/rag/data
-  globs:
-    - "*.pdf"
-```
+1. Put Markdown files under `subagents/rag/data/`.
+2. Configure the embedding endpoint in `.env`.
+3. Prepare the local knowledge index once.
+4. Start Streamlit or the backend runtime.
 
 Expected local files:
 
 ```text
 subagents/rag/data/
-└── *.pdf
+└── *.md
 ```
 
-Each query builds a temporary in-memory retrieval index. No vector database is
-started and no vectors are persisted.
+Default chunking:
 
-## Embedding Endpoint
+```dotenv
+RAG_CHUNK_CHARS=500
+RAG_CHUNK_OVERLAP=50
+```
 
-Configure an OpenAI-compatible embedding endpoint:
+Prepare the local knowledge index:
 
 ```bash
-export EMBEDDING_BASE_URL=http://localhost:8002/v1
-export EMBEDDING_MODEL=openai-compatible-embedding-model
-export OPENAI_API_KEY=not-needed
+uv run agentweave-prepare-rag
 ```
 
-Then start the backend service normally:
+This creates, if missing:
+
+```text
+.agentweave/rag_index.json
+.agentweave/rag.env
+```
+
+If `.agentweave/rag_index.json` already exists, the command reuses it and only
+ensures `.agentweave/rag.env` points to it. Pass `--overwrite` to rebuild.
+
+Then start Streamlit:
 
 ```bash
-uv run agentweave-server
+uv run streamlit run app.py
 ```
-
-## Production Replacement
-
-To use a real vector database later, keep the `search_knowledge_base` tool
-contract and replace implementation details in `env.py` / `scripts/`. Bot config
-and framework runtime do not need to change.
-
-## Limitations
-
-- First version only supports PDFs with extractable text.
-- OCR is not included.
-- PDF files are local test data and should not be committed if private.

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from agent_runtime.common import utc_now_iso
+from agent_runtime.common import agentweave_data_dir, utc_now_iso
 from agent_runtime.core.orchestrator import AgentRuntime
 from agent_runtime.core.result_events import extract_result_metadata
 from agent_runtime.core.runtime_utils import to_jsonable
@@ -37,12 +37,13 @@ class AgentServiceConfig:
         import os
 
         resolved_root = (root or Path.cwd()).resolve()
+        data_dir = agentweave_data_dir(resolved_root)
         return cls(
             root=resolved_root,
             base_url=os.getenv("QWEN36_BASE_URL", "http://localhost:8000/v1"),
             model_name=os.getenv("QWEN36_MODEL", "qwen3.6-27b"),
             api_key=os.getenv("OPENAI_API_KEY", "not-needed"),
-            session_db_path=resolved_root / ".agentweave_server_sessions.sqlite",
+            session_db_path=data_dir / "server_sessions.sqlite",
             max_tokens=int(os.getenv("QWEN36_MAX_TOKENS", "8192")),
             sql_base_url=os.getenv("EXECUTOR_BASE_URL") or None,
             sql_model_name=os.getenv("EXECUTOR_MODEL") or None,

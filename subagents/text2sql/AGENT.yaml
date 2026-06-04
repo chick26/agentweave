@@ -3,34 +3,16 @@ description: 使用自然语言查询结构化数据，生成并执行只读 SQL
 execution:
   mode: worker
   max_turns: 8
-runtime_env:
-  kind: local
-  setup_module: subagents.text2sql.env
-  mode: manual
-  test:
-    command: "python -m pytest tests/test_text2sql_tools.py"
-    env_file: ".agentweave/text2sql.env"
-tools:
-  - get_current_time
-  - list_domains
-  - get_domain_schema
-  - search_domain_values
-  - generate_readonly_sql
-  - execute_sql
+extension:
+  module: subagents.text2sql.extension
+model:
+  llm_role: executor
 memory:
   namespaces:
     - project
     - skill:text2sql
 domains:
   file: domain_catalog.yaml
-data:
-  roots:
-    - subagents/text2sql/data
-  globs:
-    - "*.csv"
-  tables:
-    resources: resources.csv
-    sea_cable_faults: sea_cable_faults.csv
 routing_hints:
   - 数据库查询、SQL、结构化数据
   - IDC 资源、机房、机柜、服务器

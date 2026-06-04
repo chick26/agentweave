@@ -41,7 +41,7 @@ Response `200`:
 {
   "subagents": [
     {"name": "text2sql", "description": "使用自然语言查询结构化数据", "routing_hints": []},
-    {"name": "rag", "description": "基于 PDF 知识库回答问题", "routing_hints": []}
+    {"name": "rag", "description": "基于 Markdown 知识库回答问题", "routing_hints": []}
   ],
   "skills": [
     {"name": "data_analysis", "description": "数据分析方法卡", "activation_hints": []}

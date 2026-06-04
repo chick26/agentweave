@@ -10,9 +10,9 @@ from agent_runtime.core.runtime_utils import (
 )
 import re
 from agent_runtime.storage.database import validate_readonly_sql
-from subagents.text2sql.scripts.domain_catalog import DomainConfig, business_metrics_to_prompt
-from subagents.text2sql.scripts.prompts import SQL_GENERATION_PROMPT
-from subagents.text2sql.scripts.sql_safety import validate_sql_uses_selected_schema
+from subagents.text2sql.core.domain_catalog import DomainConfig, business_metrics_to_prompt
+from subagents.text2sql.core.prompts import SQL_GENERATION_PROMPT
+from subagents.text2sql.core.sql_safety import validate_sql_uses_selected_schema
 
 
 async def generate_sql(

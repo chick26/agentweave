@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import json
+from pathlib import Path
 from typing import Any
 
 from agents import RunContextWrapper, function_tool
@@ -10,18 +12,18 @@ from agent_runtime.common import columns_from_rows
 from agent_runtime.core.context import RunContext
 from agent_runtime.core.events import EventKind
 from agent_runtime.core.tool_protocol import ToolOutput
-from agent_runtime.storage.database import DatabaseBackend
+from agent_runtime.storage.database import CsvSQLiteBackend, DatabaseBackend, SqlDatabaseBackend
 from agent_runtime.core.runtime_utils import (
     get_current_time_payload,
 )
-from agent_runtime.registry.skill_registry import AgentRegistry
-from subagents.text2sql.scripts.domain_catalog import (
+from agent_runtime.registry.skill_registry import AgentManifest, AgentRegistry
+from subagents.text2sql.core.domain_catalog import (
     Text2SQLDomainCatalog,
     business_metrics_to_prompt,
     domain_schema_payload,
 )
-from subagents.text2sql.scripts.sql_generation import generate_sql
-from subagents.text2sql.scripts.sql_safety import (
+from subagents.text2sql.core.sql_generation import generate_sql
+from subagents.text2sql.core.sql_safety import (
     validate_sql_uses_selected_schema,
 )
 
@@ -34,6 +36,29 @@ TEXT2SQL_DATABASE_ENVIRONMENT_ERROR = (
     "subagents/text2sql/ENVIRONMENT.md, prepare or connect the database, "
     "then restart runtime before calling Text2SQL tools."
 )
+_backend_cache: DatabaseBackend | None = None
+_backend_cache_key: tuple[str, str, str, str] | None = None
+
+
+def register(api: Any) -> None:
+    api.tool(get_current_time)
+    api.tool(list_domains)
+    api.tool(get_domain_schema)
+    api.tool(search_domain_values)
+    api.tool(generate_readonly_sql)
+    api.tool(execute_sql)
+    api.validate_environment(validate_environment)
+    api.prompt_context(build_prompt_context)
+
+
+def validate_environment(manifest: AgentManifest) -> None:
+    _connect_backend(manifest.location.parent.parent.parent)
+
+
+def build_prompt_context(manifest: AgentManifest) -> dict[str, str]:
+    return {
+        "domains": Text2SQLDomainCatalog.from_agent(manifest).format_domains_for_prompt(),
+    }
 
 
 class LinkedValueInput(BaseModel):
@@ -636,8 +661,47 @@ def _linked_values_to_payload(
 def _require_backend(run_ctx: RunContext) -> DatabaseBackend:
     backend = getattr(run_ctx, "backend", None)
     if backend is None:
-        raise RuntimeError(TEXT2SQL_DATABASE_ENVIRONMENT_ERROR)
+        backend = _connect_backend(getattr(run_ctx, "runtime_root", None) or Path.cwd())
     return backend
+
+
+def _connect_backend(root: Path | str) -> DatabaseBackend:
+    global _backend_cache, _backend_cache_key
+    backend_kind = os.getenv("TEXT2SQL_BACKEND", "").strip().lower()
+    database_url = os.getenv("TEXT2SQL_DATABASE_URL", "").strip()
+    raw_tables = os.getenv("TEXT2SQL_TABLES_JSON", "").strip()
+    cache_key = (str(Path(root)), backend_kind, database_url, raw_tables)
+    if _backend_cache is not None and _backend_cache_key == cache_key:
+        return _backend_cache
+    if database_url and backend_kind in {"", "sqlite"}:
+        _backend_cache = SqlDatabaseBackend(database_url)
+        _backend_cache_key = cache_key
+        return _backend_cache
+    if backend_kind == "csv":
+        if not raw_tables:
+            raise RuntimeError("TEXT2SQL_TABLES_JSON is required when TEXT2SQL_BACKEND=csv.")
+        tables = json.loads(raw_tables)
+        if not isinstance(tables, dict):
+            raise ValueError("TEXT2SQL_TABLES_JSON must be a JSON object.")
+        root_path = Path(root)
+        _backend_cache = CsvSQLiteBackend(
+            {
+                str(table): _resolve_path(root_path, str(path))
+                for table, path in tables.items()
+            }
+        )
+        _backend_cache_key = cache_key
+        return _backend_cache
+    if backend_kind == "sqlite":
+        raise RuntimeError("TEXT2SQL_DATABASE_URL is required when TEXT2SQL_BACKEND=sqlite.")
+    raise RuntimeError(TEXT2SQL_DATABASE_ENVIRONMENT_ERROR)
+
+
+def _resolve_path(root: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return root / path
 
 
 def _registry_from_context(ctx: RunContextWrapper[RunContext]) -> AgentRegistry:

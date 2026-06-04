@@ -33,7 +33,7 @@ sequenceDiagram
     Worker->>Worker: generate_readonly_sql() 生成只读 SQL
     Worker->>DB: execute_sql(domain, sql) 执行只读 SQL 语句
     DB-->>Worker: 返回原始数据结果
-    Worker->>Store: 将上限内结果写入本地 SQLite (agent_results.sqlite)
+    Worker->>Store: 将上限内结果写入本地 SQLite (.agentweave/agent_results.sqlite)
     Store-->>Worker: 返回对应的唯一 result_id
     Worker-->>Runner: 返回规范 JSON (含 answer, result_id, sample_rows)
     deactivate Worker
@@ -60,12 +60,12 @@ sequenceDiagram
 
 3. **沙箱隔离执行阶段（Subagent Execution）**：
    * SDK agent tool 进入执行桥后，`SubagentRunner` 在隔离内存的 `SQLiteSession` 与 `RunContext` 下动态实例化一个 Worker Subagent。
-   * Worker 根据 `prompt.md` 设定的专家行为规范，只调用自己声明的局部 tools。Text2SQL 的 Domain 选择、Schema 装载、值链接和 SQL 生成在 Text2SQL 包内完成；RAG 的 PDF 解析、临时向量索引和检索也在 RAG 包内完成。
+   * Worker 根据 `prompt.md` 设定的专家行为规范，只调用自己声明的局部 tools。Text2SQL 的 Domain 选择、Schema 装载、值链接和 SQL 生成在 Text2SQL 包内完成；RAG 的 Markdown 分段、索引初始化和检索也在 RAG 包内完成。
    * **值链接**：对于用户输入中拼写不精确的实体，`search_domain_values` 会查询数据库真实值候选，帮助 SQL 模型生成更 grounded 的 SQL。
    * **异常重试**：如 SQL 执行报错，Worker 会结合报错信息重新生成并执行最多一次。
 
 4. **结果持久化与展现阶段（Result Persistence & UI）**：
-   * 数据库只读执行后，`execute_sql` 将上限内的查询结果写入本地 `agent_results.sqlite` 的 Result Store。
+   * 数据库只读执行后，`execute_sql` 将上限内的查询结果写入本地 `.agentweave/agent_results.sqlite` 的 Result Store。
    * Worker 只携带极简的 `result_id`、`stored_row_count`、`has_more` 以及前几行的样例数据 `sample_rows` 返回给 Orchestrator，防止主模型上下文溢出。
    * Orchestrator 提取关键结论，以简洁的中文呈现给用户；前端 Streamlit 接收 `result_id`，在 "Results" 页签下进行分页数据展示及提供 CSV 导出下载。
 
@@ -76,7 +76,7 @@ sequenceDiagram
 *   **Worker 模式 (Subagent Mode)**:
     *   **配置值**: `mode: worker`
     *   **行为**: subagent 运行在完全独立的沙箱容器（`SQLiteSession`）中，作为一个自治的 Worker Agent 运行多步推理逻辑。主编排器（Orchestrator）通过 SDK agent-as-tool 风格的同名工具进行委派，Worker 内部调用自己局部的 Tools 完成工作后返回统一格式的 JSON 结果。
-    *   **接入方式**: 固定按目录约定加载 `tools.py` 和可选 `context.py`；不允许通过 manifest 覆盖 Python module path。`runtime_env` 只声明本地测试环境入口，框架不直接启动数据库或向量库。
+    *   **接入方式**: 通过 `extension.module` 加载 subagent 自己的 `extension.py register(api)`；扩展自行注册工具、环境检查和 prompt context。`tools.py` 只作为显式声明的自定义补充工具入口。
     *   **适用场景**: 需要大模型进行复杂的垂直推理、多步骤操作、容错纠错的场景（如 SQL 纠错、网页深度爬取等）。
 
 ### 2. Skill 方法卡（Skills）
@@ -86,7 +86,7 @@ sequenceDiagram
 当前接入的 `data_analysis` skill 借鉴 DB-GPT 的数据分析 skill 思路：先做数据画像，再检查质量信号、异常值、分布/排行，最后给出图表建议和报告结构。需要使用时，Orchestrator 调用 `load_skill("data_analysis")` 读取完整方法卡，再将步骤用于当前回答或写入 subagent task。
 
 ### 3. 记忆系统（Memory System）
-系统提供基于 SQLite 存储（`agent_memory.sqlite`）的持久化与会话记忆，由 `MemoryManager` 统一调度。长期记忆优先通过 Embedding 向量检索注入，失败时退回词法检索或最近记录；Streamlit 侧栏可关闭 Memory 能力，或直接清空记忆库中的记忆记录、会话摘要和向量索引。作用域如下：
+系统提供基于 SQLite 存储（`.agentweave/agent_memory.sqlite`）的持久化与会话记忆，由 `MemoryManager` 统一调度。长期记忆优先通过 Embedding 向量检索注入，失败时退回词法检索或最近记录；Streamlit 侧栏可关闭 Memory 能力，或直接清空记忆库中的记忆记录、会话摘要和向量索引。作用域如下：
 *   **长期记忆 (Durable Memory)**:
     *   `project` 命名空间：存储跨会话的项目级别约定、口径与数据映射规则。
     *   `user` 命名空间：存储用户个性化偏好。
@@ -106,7 +106,7 @@ sequenceDiagram
 |------|------|------|
 | bot | `data_analyst` | 挂载 `text2sql`、`rag` 与 `data_analysis` 的数据分析机器人 |
 | subagent | `text2sql` | 使用自然语言查询结构化数据 |
-| subagent | `rag` | 基于本地 PDF 知识库检索并返回来源片段 |
+| subagent | `rag` | 基于本地 Markdown 知识库检索并返回来源片段 |
 | skill | `data_analysis` | 数据画像、质量检查、异常发现、图表建议的方法卡 |
 
 ## 详细文档
@@ -140,23 +140,22 @@ text2sql/
 │   └── ui/streamlit/              # Streamlit rendering and session actions
 ├── subagents/
 │   ├── text2sql/
-│   │   ├── AGENT.yaml             # subagent 能力元数据、tools/data/runtime_env 声明
+│   │   ├── AGENT.yaml             # subagent 能力元数据、extension/tools 声明
 │   │   ├── prompt.md              # worker prompt 模板
-│   │   ├── env.py                 # Text2SQL 本地测试 DB 准备入口
+│   │   ├── extension.py           # Text2SQL extension 注册入口
 │   │   ├── ENVIRONMENT.md         # Text2SQL 本地/生产环境启动说明
-│   │   ├── context.py             # 可选 prompt context provider
-│   │   ├── tools.py               # Text2SQL subagent-local tools
 │   │   ├── data/                  # Text2SQL 私有本地 CSV 测试数据
 │   │   ├── domain_catalog.yaml    # Text2SQL table/domain catalog
-│   │   └── scripts/               # domain catalog / SQL generation / env scripts
+│   │   ├── core/                  # domain catalog / SQL generation / SQL safety
+│   │   └── prepare/               # SQLite 构建等离线准备脚本
 │   └── rag/
-│       ├── AGENT.yaml             # RAG 能力元数据、PDF data/runtime_env 声明
+│       ├── AGENT.yaml             # RAG 能力元数据、extension 声明
 │       ├── prompt.md              # RAG worker prompt 模板
-│       ├── env.py                 # 本地 PDF 知识库检索入口
-│       ├── ENVIRONMENT.md         # RAG embedding/PDF 本地环境启动说明
-│       ├── tools.py               # RAG subagent-local tools
-│       ├── data/                  # RAG 私有本地 PDF 测试数据
-│       └── scripts/               # PDF loader / retrieval / local test scripts
+│       ├── extension.py           # RAG extension 注册入口
+│       ├── ENVIRONMENT.md         # RAG Markdown index 本地环境启动说明
+│       ├── data/                  # RAG 私有本地 Markdown 测试数据
+│       ├── core/                  # Markdown loader / retrieval / index data structure
+│       └── prepare/               # RAG index 离线构建脚本
 ├── bots/
 │   └── data_analyst/
 │       └── BOT.yaml               # 后端 Bot 配置：挂载能力与 preset questions
@@ -174,11 +173,12 @@ text2sql/
 新增通用 subagent：
 
 1. 在 `subagents/` 下创建新目录，例如 `subagents/my_agent/`。
-2. 创建 `AGENT.yaml`，声明 `name`、`description`、`execution`、`tools`、`memory`、`data`、可选 `runtime_env` 和 `routing_hints`。
+2. 创建 `AGENT.yaml`，声明 `name`、`description`、`execution`、`extension`、`memory`、可选 `tools` 和 `routing_hints`。
 3. 创建 `prompt.md`，作为 worker prompt 模板。
-4. 在 subagent 目录中实现 `tools.py`；runner 只从该目录加载这个固定文件。如果 prompt 需要动态上下文，可新增 `context.py` 并暴露 `build_prompt_context(manifest)`。
-5. 如果需要本地测试环境，必须提供 `ENVIRONMENT.md`，可新增 `env.py`、`data/` 和 `scripts/`。框架只把 `root`、`manifest`、`RunContext` 交给 tools/env，不理解 SQL、PDF、向量库等业务细节。
-6. 可通过环境变量关闭某个 subagent 的 tools，例如 `SUBAGENT_TEXT2SQL_ENABLED=0`。
+4. 在 subagent 目录中实现 `extension.py`，暴露 `register(api)`；通过 `api.tool(...)`、`api.validate_environment(...)`、`api.prompt_context(...)` 注册能力。
+5. 如果需要自定义补充工具，可新增 `tools.py` 并在 `AGENT.yaml.tools` 中显式声明工具名。
+6. 如果需要本地准备流程，提供 `ENVIRONMENT.md`、`data/`、`core/` 和 `prepare/`。框架只执行 extension 注册协议，不理解 SQL、Markdown、向量库等业务细节。
+7. 可通过环境变量关闭某个 subagent 的 tools，例如 `SUBAGENT_TEXT2SQL_ENABLED=0`。
 
 新增 subagent 只要符合这个 contract，不需要给框架新增专属测试；registry 启动时会校验目录形状。不符合格式就直接报配置错误。
 
@@ -188,11 +188,12 @@ text2sql/
 subagents/<name>/
 ├── AGENT.yaml
 ├── prompt.md
-├── tools.py
-├── ENVIRONMENT.md    # 有 runtime_env 时必需
-├── env.py            # 可选，本地测试环境入口
+├── extension.py      # 必需，register(api)
+├── tools.py          # 可选，自定义补充工具
+├── ENVIRONMENT.md    # 可选，环境准备说明
 ├── data/             # 可选，本 subagent 私有测试数据
-└── scripts/          # 可选，业务实现脚本
+├── core/             # 可选，业务纯逻辑
+└── prepare/          # 可选，离线准备脚本
 ```
 
 最小 worker subagent manifest 示例：
@@ -205,17 +206,10 @@ execution:
   model_role: orchestrator
   max_turns: 8
   timeout_seconds: 60
-runtime_env:
-  kind: local
-  setup_module: subagents.my_agent.env
-  mode: lazy
+extension:
+  module: subagents.my_agent.extension
 tools:
   - first_tool
-data:
-  roots:
-    - subagents/my_agent/data
-  globs:
-    - "*.json"
 routing_hints:
   - 何时路由到这个 subagent
 ```
@@ -282,6 +276,7 @@ uv run agentweave-prepare-text2sql --overwrite
 uv sync
 cp .env.example .env
 uv run agentweave-prepare-text2sql --overwrite
+uv run agentweave-prepare-rag
 uv run streamlit run app.py
 ```
 
@@ -314,7 +309,7 @@ TEXT2SQL_DATABASE_URL=sqlite:////absolute/path/to/.agentweave/text2sql.sqlite
 
 ## 查询结果存储
 
-`execute_sql()` 不再把完整查询结果塞进 worker 上下文，而是写入本地 SQLite `agent_results.sqlite`。Worker 只看到：
+`execute_sql()` 不再把完整查询结果塞进 worker 上下文，而是写入本地 SQLite `.agentweave/agent_results.sqlite`。Worker 只看到：
 
 - `result_id`
 - `row_count` / `stored_row_count`
@@ -337,7 +332,7 @@ export SQL_RESULT_TTL_HOURS=24         # 可选：写入新结果时清理超过
 
 ## 诊断日志
 
-Streamlit 每次用户提问都会把完整诊断 run 写入 `.streamlit_agent_sessions.sqlite`。诊断字段只使用规范化字段写入；缺时间、usage 或 request 时会记录 `diagnostic_issue`，不会从 raw JSON 反推。
+Streamlit 每次用户提问都会把完整诊断 run 写入 `.agentweave/streamlit_sessions.sqlite`。诊断字段只使用规范化字段写入；缺时间、usage 或 request 时会记录 `diagnostic_issue`，不会从 raw JSON 反推。
 
 - `agent_run_logs`：一轮用户问题、最终回答、状态、耗时、token 汇总、trace summary。
 - `agent_run_model_calls`：每次模型调用的规范时间、耗时、token、消息数、工具数、诊断问题和 raw payload。
@@ -346,13 +341,13 @@ Streamlit 每次用户提问都会把完整诊断 run 写入 `.streamlit_agent_s
 常用查询：
 
 ```bash
-sqlite3 .streamlit_agent_sessions.sqlite \
+sqlite3 .agentweave/streamlit_sessions.sqlite \
   "select run_id, session_id, status, duration_ms, total_tokens, substr(question,1,60), completed_at from agent_run_logs order by completed_at desc limit 10"
 
-sqlite3 .streamlit_agent_sessions.sqlite \
+sqlite3 .agentweave/streamlit_sessions.sqlite \
   "select call_index, title, model, duration_ms, total_tokens, diagnostic_issue, created_at from agent_run_model_calls where run_id='<run_id>' order by call_index"
 
-sqlite3 .streamlit_agent_sessions.sqlite \
+sqlite3 .agentweave/streamlit_sessions.sqlite \
   "select event_index, kind, stage, diagnostic_issue, created_at from agent_run_events where run_id='<run_id>' order by event_index"
 ```
 

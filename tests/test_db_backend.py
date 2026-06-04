@@ -7,15 +7,15 @@ from types import SimpleNamespace
 import pytest
 
 from agent_runtime.core.runtime_utils import get_current_time_payload
-from subagents.text2sql.scripts.sql_generation import extract_sql
-from subagents.text2sql.env import load_csv_tables, load_database_backend
+from subagents.text2sql.core.sql_generation import extract_sql
+from subagents.text2sql import extension as text2sql_extension
 from agent_runtime.storage.database import (
     CsvSQLiteBackend,
     SqlDatabaseBackend,
     _coerce_csv_value,
     validate_readonly_sql,
 )
-from subagents.text2sql.env import manifest_csv_tables
+from subagents.text2sql.prepare.sqlite import manifest_csv_tables
 
 
 def test_csv_backend_infers_types_and_executes_numeric_queries(tmp_path):
@@ -120,30 +120,41 @@ def test_sql_database_backend_reads_sqlite_file(tmp_path):
     ]
 
 
-def test_csv_table_config_can_be_overridden_by_env(tmp_path, monkeypatch):
+def test_text2sql_extension_connects_csv_backend_from_env(tmp_path, monkeypatch):
+    csv_path = tmp_path / "demo.csv"
+    csv_path.write_text("room\n403\n", encoding="utf-8")
     monkeypatch.setenv("TEXT2SQL_BACKEND", "csv")
     monkeypatch.setenv("TEXT2SQL_TABLES_JSON", '{"demo": "demo.csv"}')
-    assert load_csv_tables(tmp_path) == {"demo": tmp_path / "demo.csv"}
+    monkeypatch.setattr(text2sql_extension, "_backend_cache", None)
+    monkeypatch.setattr(text2sql_extension, "_backend_cache_key", None)
+
+    backend = text2sql_extension._connect_backend(tmp_path)
+
+    assert backend.get_columns("demo") == ["room"]
 
 
 def test_database_backend_requires_explicit_text2sql_environment(tmp_path, monkeypatch):
     monkeypatch.delenv("TEXT2SQL_BACKEND", raising=False)
     monkeypatch.delenv("TEXT2SQL_TABLES_JSON", raising=False)
     monkeypatch.delenv("TEXT2SQL_DATABASE_URL", raising=False)
+    monkeypatch.setattr(text2sql_extension, "_backend_cache", None)
+    monkeypatch.setattr(text2sql_extension, "_backend_cache_key", None)
 
     with pytest.raises(RuntimeError, match="database environment is not prepared"):
-        load_database_backend(tmp_path)
+        text2sql_extension._connect_backend(tmp_path)
 
 
 def test_csv_backend_requires_explicit_table_config(tmp_path, monkeypatch):
     monkeypatch.setenv("TEXT2SQL_BACKEND", "csv")
     monkeypatch.delenv("TEXT2SQL_TABLES_JSON", raising=False)
+    monkeypatch.setattr(text2sql_extension, "_backend_cache", None)
+    monkeypatch.setattr(text2sql_extension, "_backend_cache_key", None)
 
     with pytest.raises(RuntimeError, match="TEXT2SQL_TABLES_JSON is required"):
-        load_database_backend(tmp_path)
+        text2sql_extension._connect_backend(tmp_path)
 
 
-def test_text2sql_env_can_use_subagent_manifest_data(tmp_path, monkeypatch):
+def test_text2sql_prepare_can_use_subagent_manifest_data(tmp_path, monkeypatch):
     monkeypatch.delenv("TEXT2SQL_TABLES_JSON", raising=False)
     csv_path = tmp_path / "subagents" / "text2sql" / "data" / "resources.csv"
     csv_path.parent.mkdir(parents=True)

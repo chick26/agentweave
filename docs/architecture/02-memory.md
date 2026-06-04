@@ -18,7 +18,7 @@ Agent 系统的上下文窗口不是无限的。如果把所有的运行日志�
 
 ## 存储层：MemoryStore
 
-底层存储基于 SQLite 数据库 (`agent_memory.sqlite`)。它不仅存纯文本，还同时支持向量搜索。
+底层存储基于 SQLite 数据库 (`.agentweave/agent_memory.sqlite`)。它不仅存纯文本，还同时支持向量搜索。
 
 ```sql
 -- 主记录表：支持 UPSERT，确保相同 namespace 和 key 下只有一条最新记录

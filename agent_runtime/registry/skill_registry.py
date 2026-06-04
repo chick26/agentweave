@@ -37,10 +37,18 @@ class ManifestData:
 
 
 @dataclass(frozen=True)
-class ManifestRuntimeEnv:
-    kind: str = ""
-    setup_module: str = ""
-    mode: str = "lazy"
+class ManifestModel:
+    llm_role: str = ""
+    llm: str = ""
+    llm_base_url: str = ""
+    embedding_role: str = ""
+    embedding: str = ""
+    embedding_base_url: str = ""
+
+
+@dataclass(frozen=True)
+class ManifestExtension:
+    module: str = ""
 
 
 @dataclass(frozen=True)
@@ -55,7 +63,8 @@ class ManifestBase:
     memory: ManifestMemory = field(default_factory=ManifestMemory)
     domains: ManifestDomains = field(default_factory=ManifestDomains)
     data: ManifestData = field(default_factory=ManifestData)
-    runtime_env: ManifestRuntimeEnv = field(default_factory=ManifestRuntimeEnv)
+    model: ManifestModel = field(default_factory=ManifestModel)
+    extension: ManifestExtension = field(default_factory=ManifestExtension)
     routing_hints: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -215,7 +224,8 @@ SkillExecution = ManifestExecution
 SkillMemory = ManifestMemory
 SkillDomains = ManifestDomains
 SkillData = ManifestData
-SkillRuntimeEnv = ManifestRuntimeEnv
+SkillModel = ManifestModel
+SkillExtension = ManifestExtension
 
 
 def _read_yaml_manifest(
@@ -273,9 +283,8 @@ def _build_manifest_from_metadata(
     memory = metadata.get("memory") if isinstance(metadata.get("memory"), dict) else {}
     domains = metadata.get("domains") if isinstance(metadata.get("domains"), dict) else {}
     data = metadata.get("data") if isinstance(metadata.get("data"), dict) else {}
-    runtime_env = (
-        metadata.get("runtime_env") if isinstance(metadata.get("runtime_env"), dict) else {}
-    )
+    model = metadata.get("model") if isinstance(metadata.get("model"), dict) else {}
+    extension = metadata.get("extension") if isinstance(metadata.get("extension"), dict) else {}
     execution_mode = str(execution.get("mode", "inline"))
     model_role = str(execution.get("model_role") or "")
     if kind == "subagent" and execution_mode == "worker" and not model_role:
@@ -304,10 +313,16 @@ def _build_manifest_from_metadata(
             globs=_as_str_list(data.get("globs", [])),
             tables=_as_str_dict(data.get("tables", {})),
         ),
-        runtime_env=ManifestRuntimeEnv(
-            kind=str(runtime_env.get("kind", "")),
-            setup_module=str(runtime_env.get("setup_module", "")),
-            mode=str(runtime_env.get("mode", "lazy")),
+        model=ManifestModel(
+            llm_role=str(model.get("llm_role", "")),
+            llm=str(model.get("llm", "")),
+            llm_base_url=str(model.get("llm_base_url", "")),
+            embedding_role=str(model.get("embedding_role", "")),
+            embedding=str(model.get("embedding", "")),
+            embedding_base_url=str(model.get("embedding_base_url", "")),
+        ),
+        extension=ManifestExtension(
+            module=str(extension.get("module", "")),
         ),
         routing_hints=_as_str_list(metadata.get("routing_hints", [])),
         metadata=metadata,
@@ -355,10 +370,6 @@ def _validate_subagent_contract(manifest: ManifestBase) -> None:
         )
     if manifest.tools and not (root / "tools.py").exists():
         raise ValueError(f"Subagent `{manifest.name}` declares tools but tools.py is missing.")
-    if manifest.runtime_env.kind and not (root / "ENVIRONMENT.md").exists():
-        raise ValueError(
-            f"Subagent `{manifest.name}` declares runtime_env but ENVIRONMENT.md is missing."
-        )
 
 
 def _optional_int(value: Any) -> int | None:
@@ -422,7 +433,7 @@ def _subagent_signature_paths(root: Path) -> list[Path]:
             "AGENT.yaml",
             "prompt.md",
             "tools.py",
-            "context.py",
+            "extension.py",
             "ENVIRONMENT.md",
             "domain_catalog.yaml",
         ]:

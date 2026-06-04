@@ -9,13 +9,8 @@ from typing import Any
 
 import streamlit as st
 
-from agent_runtime.common import load_runtime_env_files, utc_now_iso
-from agent_runtime.core.session_ops import (
-    fork_sqlite_session,
-    replace_sqlite_session_items,
-)
+from agent_runtime.common import agentweave_data_dir, load_runtime_env_files, utc_now_iso
 from agent_runtime.storage.diagnostic_store import DiagnosticStore
-from agent_runtime.storage.session_templates import SessionTemplateStore
 from agent_runtime.ui.streamlit.chat import render_chat_history, stream_text
 from agent_runtime.ui.streamlit.diagnostics import (
     render_execution_runs,
@@ -28,10 +23,6 @@ from agent_runtime.ui.streamlit.events import (
     should_show_live_event,
     STAGE_CONFIG,
 )
-from agent_runtime.ui.streamlit.export import (
-    build_session_html,
-    build_session_markdown,
-)
 from agent_runtime.ui.streamlit.results import RuntimeConfig, render_result_runs
 from agent_runtime.ui.streamlit.resources import (
     format_reload_summary,
@@ -43,8 +34,8 @@ from agent_runtime.ui.streamlit.styles import inject_styles
 
 ROOT = Path(__file__).resolve().parents[3]
 load_runtime_env_files(ROOT)
-SESSION_DB_PATH = ROOT / ".streamlit_agent_sessions.sqlite"
-SESSION_TEMPLATE_DB_PATH = ROOT / "agent_session_templates.sqlite"
+DATA_DIR = agentweave_data_dir(ROOT)
+SESSION_DB_PATH = DATA_DIR / "streamlit_sessions.sqlite"
 TEXT2SQL_AGENT_ROOT = ROOT / "subagents" / "text2sql"
 
 # -- Model defaults (hidden from UI) ----------------------------------
@@ -64,7 +55,29 @@ inject_styles()
 st.title("AgentWeave")
 
 
+@st.cache_data(show_spinner=False)
+def get_bot_options() -> list[dict[str, str]]:
+    from agent_runtime.registry.bot_registry import BotRegistry
+    from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
+
+    registry = BotRegistry(
+        bots_root=ROOT / "bots",
+        agent_registry=AgentRegistry(subagents_root=ROOT / "subagents"),
+        skill_registry=SkillRegistry(skills_root=ROOT / "skills"),
+    )
+    return [
+        {
+            "id": item["id"],
+            "name": item.get("name", item["id"]),
+            "description": item.get("description", ""),
+        }
+        for item in registry.list_summaries()
+    ]
+
+
 sidebar_config = render_sidebar(
+    bot_options=get_bot_options(),
+    bot_id_default=st.session_state.get("active_bot_id", "data_analyst"),
     base_url_default=BASE_URL,
     model_name_default=MODEL_NAME,
     max_output_tokens_default=MAX_OUTPUT_TOKENS,
@@ -76,10 +89,10 @@ sidebar_config = render_sidebar(
     api_key_default=API_KEY,
 )
 max_turns = sidebar_config.max_turns
+selected_bot_id = sidebar_config.bot_id
 memory_enabled = sidebar_config.memory_enabled
 clear_memory_requested = sidebar_config.clear_memory_requested
 reload_resources_requested = sidebar_config.reload_resources_requested
-fork_session_requested = sidebar_config.fork_session_requested
 base_url = sidebar_config.base_url
 model_name = sidebar_config.model_name
 max_output_tokens = sidebar_config.max_output_tokens
@@ -111,11 +124,6 @@ def get_secret_fingerprint(value: str) -> str:
 @st.cache_resource(show_spinner=False)
 def get_diagnostic_store() -> DiagnosticStore:
     return DiagnosticStore(SESSION_DB_PATH)
-
-
-@st.cache_resource(show_spinner=False)
-def get_session_template_store() -> SessionTemplateStore:
-    return SessionTemplateStore(SESSION_TEMPLATE_DB_PATH)
 
 
 @st.cache_resource(show_spinner=False)
@@ -216,6 +224,7 @@ def get_initial_assistant_message(
     memory_enabled: bool,
     api_key: str,
     session_id: str,
+    bot_id: str,
     domains_signature: tuple[tuple[str, int, int], ...],
 ) -> str:
     del domains_signature
@@ -238,6 +247,7 @@ def get_initial_assistant_message(
             model_name=sql_model_name,
             api_key=api_key,
             questions_per_domain=PRESET_QUESTIONS_PER_DOMAIN,
+            bot_id=bot_id,
         )
         return result.message
     except ImportError:
@@ -279,47 +289,20 @@ if reload_resources_requested:
 
 
 if "session_id" not in st.session_state:
-    st.session_state.session_id = f"streamlit-{uuid.uuid4()}"
+    st.session_state.session_id = f"streamlit-{selected_bot_id}-{uuid.uuid4()}"
 
-if fork_session_requested:
-    source_session_id = st.session_state.session_id
-    target_session_id = f"streamlit-{uuid.uuid4()}"
-    try:
-        copied_items = asyncio.run(
-            fork_sqlite_session(
-                db_path=SESSION_DB_PATH,
-                source_session_id=source_session_id,
-                target_session_id=target_session_id,
-            )
-        )
-        st.session_state.session_id = target_session_id
-        st.session_state.setdefault("event_runs", []).append(
-            {
-                "run_id": f"session-{uuid.uuid4().hex[:16]}",
-                "label": "Fork Session",
-                "question": "Fork Session",
-                "events": [
-                    {
-                        "kind": "session_forked",
-                        "timestamp": utc_now_iso(),
-                        "run_id": target_session_id,
-                        "payload": {
-                            "stage": "session_forked",
-                            "source_session_id": source_session_id,
-                            "target_session_id": target_session_id,
-                            "copied_items": copied_items,
-                        },
-                    }
-                ],
-            }
-        )
-        st.toast(f"已分叉到新会话：{target_session_id}")
-    except Exception as exc:
-        st.error(f"会话分叉失败：`{type(exc).__name__}: {exc}`")
+if st.session_state.get("active_bot_id") != selected_bot_id:
+    st.session_state.active_bot_id = selected_bot_id
+    st.session_state.session_id = f"streamlit-{selected_bot_id}-{uuid.uuid4()}"
+    st.session_state.pop("messages", None)
+    st.session_state.model_log_runs = []
+    st.session_state.event_runs = []
+    st.session_state.pop("initial_message_signature", None)
 
 domains_root = TEXT2SQL_AGENT_ROOT
 domains_signature = get_domains_signature(domains_root)
 initial_message_signature = (
+    selected_bot_id,
     base_url,
     model_name,
     max_output_tokens,
@@ -345,6 +328,7 @@ if "messages" not in st.session_state:
         memory_enabled=memory_enabled,
         api_key=api_key,
         session_id=st.session_state.session_id,
+        bot_id=selected_bot_id,
         domains_signature=domains_signature,
     )
     st.session_state.messages = [
@@ -371,6 +355,7 @@ elif (
         memory_enabled=memory_enabled,
         api_key=api_key,
         session_id=st.session_state.session_id,
+        bot_id=selected_bot_id,
         domains_signature=domains_signature,
     )
     st.session_state.messages[0]["content"] = initial_assistant_message
@@ -379,148 +364,6 @@ if "model_log_runs" not in st.session_state:
     st.session_state.model_log_runs = []
 if "event_runs" not in st.session_state:
     st.session_state.event_runs = []
-
-
-def _append_local_event_run(
-    *,
-    label: str,
-    event: dict[str, Any],
-) -> None:
-    st.session_state.setdefault("event_runs", []).append(
-        {
-            "run_id": str(event.get("run_id") or f"local-{uuid.uuid4().hex[:16]}"),
-            "label": label,
-            "question": label,
-            "events": [event],
-        }
-    )
-
-
-with st.sidebar:
-    st.divider()
-    st.caption("会话模板")
-    template_name = st.text_input(
-        "模板名称",
-        value="",
-        placeholder="例如：IDC 月度巡检",
-        key="session_template_name",
-    )
-    if st.button(
-        "Save Template",
-        help="把当前可见对话保存为可复用模板。",
-        use_container_width=True,
-    ):
-        try:
-            template_will_overwrite = get_session_template_store().template_exists(template_name)
-            template_id = get_session_template_store().save_template(
-                name=template_name,
-                messages=st.session_state.messages,
-            )
-            event = {
-                "kind": "session_template_saved",
-                "timestamp": utc_now_iso(),
-                "run_id": f"template-{uuid.uuid4().hex[:16]}",
-                "payload": {
-                    "stage": "session_template_saved",
-                    "template_id": template_id,
-                    "template_name": template_name.strip(),
-                    "message_count": len(st.session_state.messages),
-                },
-            }
-            _append_local_event_run(label="Save Template", event=event)
-            action = "已覆盖" if template_will_overwrite else "已保存"
-            st.toast(f"模板{action}：{template_name.strip()}")
-        except ValueError as exc:
-            st.warning(str(exc))
-        except Exception as exc:
-            st.error(f"保存模板失败：`{type(exc).__name__}: {exc}`")
-
-    templates = get_session_template_store().list_templates()
-    if templates:
-        selected_template_id = st.selectbox(
-            "选择模板",
-            options=[template.id for template in templates],
-            format_func=lambda template_id: next(
-                template.name for template in templates if template.id == template_id
-            ),
-            key="selected_session_template",
-        )
-        start_column, delete_column = st.columns(2, gap="small")
-        if start_column.button(
-            "Start",
-            help="用模板内容启动一个新会话。",
-            use_container_width=True,
-        ):
-            try:
-                template = get_session_template_store().get_template(selected_template_id)
-                target_session_id = f"streamlit-{uuid.uuid4()}"
-                copied_items = asyncio.run(
-                    replace_sqlite_session_items(
-                        db_path=SESSION_DB_PATH,
-                        session_id=target_session_id,
-                        items=template.messages,
-                    )
-                )
-                st.session_state.session_id = target_session_id
-                st.session_state.messages = list(template.messages)
-                st.session_state.model_log_runs = []
-                st.session_state.event_runs = []
-                event = {
-                    "kind": "session_template_started",
-                    "timestamp": utc_now_iso(),
-                    "run_id": target_session_id,
-                    "payload": {
-                        "stage": "session_template_started",
-                        "template_id": template.id,
-                        "template_name": template.name,
-                        "target_session_id": target_session_id,
-                        "message_count": copied_items,
-                    },
-                }
-                _append_local_event_run(label="Start From Template", event=event)
-                st.toast(f"已从模板启动：{template.name}")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"启动模板失败：`{type(exc).__name__}: {exc}`")
-        if delete_column.button(
-            "Delete",
-            help="删除选中的会话模板。",
-            use_container_width=True,
-        ):
-            get_session_template_store().delete_template(selected_template_id)
-            st.toast("模板已删除。")
-            st.rerun()
-    else:
-        st.caption("暂无模板。")
-
-session_markdown = build_session_markdown(
-    session_id=st.session_state.session_id,
-    messages=st.session_state.messages,
-    event_runs=st.session_state.event_runs,
-)
-session_html = build_session_html(
-    session_id=st.session_state.session_id,
-    messages=st.session_state.messages,
-    event_runs=st.session_state.event_runs,
-)
-with st.sidebar:
-    st.divider()
-    st.caption("会话导出")
-    export_column, html_export_column = st.columns(2, gap="small")
-    export_column.download_button(
-        "Markdown",
-        data=session_markdown,
-        file_name=f"{st.session_state.session_id}.md",
-        mime="text/markdown",
-        use_container_width=True,
-    )
-    html_export_column.download_button(
-        "HTML",
-        data=session_html,
-        file_name=f"{st.session_state.session_id}.html",
-        mime="text/html",
-        use_container_width=True,
-    )
 
 
 def _format_run_option(run: dict[str, Any]) -> str:
@@ -620,6 +463,7 @@ if prompt:
                         st.session_state.session_id,
                         event_callback=on_event,
                         max_turns=max_turns,
+                        bot_id=selected_bot_id,
                     )
                 )
                 answer = response["final_output"]

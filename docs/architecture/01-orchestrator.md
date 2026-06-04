@@ -48,7 +48,7 @@ class AgentRuntime:
         self.bot_registry = BotRegistry(bots_root=self.root / "bots", ...)
         
         self.memory_manager = MemoryManager(...)
-        self.result_store = ResultStore(self.root / "agent_results.sqlite")
+        self.result_store = ResultStore(self.data_dir / "agent_results.sqlite")
         
         # 隔离执行桥梁
         self.subagent_runner = SubagentRunner(...)

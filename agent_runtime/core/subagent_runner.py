@@ -21,6 +21,10 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from agent_runtime.core.context import OrchestratorContext, RunContext
 from agent_runtime.core.events import EventKind
+from agent_runtime.core.subagent_extensions import (
+    build_extension_prompt_context,
+    build_extension_tools,
+)
 from agent_runtime.memory.memory_manager import MemoryManager
 from agent_runtime.core.runtime_utils import build_model, json_dumps, make_async_client, to_jsonable
 from agent_runtime.registry.skill_registry import AgentManifest, AgentRegistry, SkillRegistry
@@ -32,13 +36,16 @@ WORKER_TIMEOUT_SECONDS = float(os.getenv("WORKER_TIMEOUT_SECONDS", "120"))
 
 
 _loaded_modules: dict[str, Any] = {}
-_loaded_context_modules: dict[str, Any] = {}
+
+
+def _subagent_enabled(manifest: AgentManifest) -> bool:
+    env_key = f"{_subagent_env_prefix(manifest.name)}_ENABLED"
+    enabled_value = os.getenv(env_key, "1").strip().lower()
+    return enabled_value not in {"0", "false", "no", "off"}
 
 
 def _load_subagent_module(manifest: AgentManifest) -> Any | None:
-    env_key = f"{_subagent_env_prefix(manifest.name)}_ENABLED"
-    enabled_value = os.getenv(env_key, "1").strip().lower()
-    if enabled_value in {"0", "false", "no", "off"}:
+    if not _subagent_enabled(manifest):
         return None
     module_name = f"subagents.{manifest.name}.tools"
     return _load_subagent_python_file(
@@ -46,17 +53,6 @@ def _load_subagent_module(manifest: AgentManifest) -> Any | None:
         filename="tools.py",
         module_name=module_name,
         required=bool(manifest.tools),
-    )
-
-
-def _load_subagent_context_module(manifest: AgentManifest) -> Any | None:
-    module_name = f"subagents.{manifest.name}.context"
-    return _load_subagent_python_file(
-        manifest=manifest,
-        filename="context.py",
-        module_name=module_name,
-        required=False,
-        cache=_loaded_context_modules,
     )
 
 
@@ -437,23 +433,40 @@ class SubagentRunner:
         return template
 
     def _load_prompt_context(self, manifest: AgentManifest) -> dict[str, Any]:
-        module = _load_subagent_context_module(manifest)
-        if module is None or not hasattr(module, "build_prompt_context"):
-            return {}
-        context = module.build_prompt_context(manifest)
-        return context if isinstance(context, dict) else {}
+        return build_extension_prompt_context(manifest)
 
     def _build_subagent_tools(self, manifest: AgentManifest) -> list[Any]:
-        module = _load_subagent_module(manifest)
-        if module is None:
+        if not _subagent_enabled(manifest):
             return []
-        missing = [name for name in manifest.tools if not hasattr(module, name)]
-        if missing:
-            raise ValueError(
-                f"Subagent `{manifest.name}` declares missing tools in "
-                f"{module.__name__}: {', '.join(missing)}"
-            )
-        return [getattr(module, name) for name in manifest.tools]
+        tools_by_name: dict[str, Any] = {}
+        for tool in build_extension_tools(manifest):
+            tools_by_name[_tool_name(tool)] = tool
+        module = _load_subagent_module(manifest)
+        if module is not None:
+            missing = [name for name in manifest.tools if not hasattr(module, name)]
+            if missing:
+                raise ValueError(
+                    f"Subagent `{manifest.name}` declares missing tools in "
+                    f"{module.__name__}: {', '.join(missing)}"
+                )
+            for name in manifest.tools:
+                if name in tools_by_name:
+                    raise ValueError(
+                        f"Subagent `{manifest.name}` declares custom tool `{name}` "
+                        "that conflicts with an extension tool."
+                    )
+                tools_by_name[name] = getattr(module, name)
+        return list(tools_by_name.values())
+
+
+def _tool_name(tool: Any) -> str:
+    name = getattr(tool, "name", "")
+    if name:
+        return str(name)
+    name = getattr(tool, "__name__", "")
+    if name:
+        return str(name)
+    raise ValueError(f"Registered subagent tool is missing a name: {tool!r}")
 
 
 def _coerce_subagent_result(value: Any, subagent_name: str) -> SubagentResult:

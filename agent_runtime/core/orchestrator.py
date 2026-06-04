@@ -44,6 +44,7 @@ from agent_runtime.core.runtime_utils import (
     to_jsonable,
 )
 from agent_runtime.core.settings import build_model_profiles
+from agent_runtime.core.subagent_extensions import validate_extension_environment
 from agent_runtime.core.tool_protocol import ToolOutput
 from agent_runtime.registry.bot_registry import BotConfig, BotRegistry
 from agent_runtime.registry.resources import ResourceLoader
@@ -51,7 +52,7 @@ from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
 from agent_runtime.core.subagent_runner import SubagentRunner
 from pydantic import BaseModel
 
-from agent_runtime.common import env_bool
+from agent_runtime.common import agentweave_data_dir, env_bool
 
 
 class TodoToolItem(BaseModel):
@@ -98,31 +99,25 @@ class AgentRuntime:
         embedding_model_name: str | None = None,
         memory_enabled: bool | None = None,
         timezone_name: str | None = None,
+        validate_subagents: bool | None = None,
     ) -> None:
         set_tracing_disabled(True)
         self.session_db_path = session_db_path
+        self.session_db_path.parent.mkdir(parents=True, exist_ok=True)
         session_root = session_db_path.resolve().parent
+        if session_root.name == ".agentweave":
+            session_root = session_root.parent
         self.root = (
             session_root
             if (session_root / "skills").exists() or (session_root / "subagents").exists()
             else Path.cwd().resolve()
         )
+        self.data_dir = agentweave_data_dir(self.root)
         self.skill_registry = SkillRegistry(skills_root=self.root / "skills")
         self.agent_registry = AgentRegistry(subagents_root=self.root / "subagents")
         if backend is None:
             if tables is not None:
                 backend = CsvSQLiteBackend(tables)
-            else:
-                for manifest in self.agent_registry.discover():
-                    if manifest.runtime_env and manifest.runtime_env.setup_module:
-                        try:
-                            import importlib
-                            mod = importlib.import_module(manifest.runtime_env.setup_module)
-                            if hasattr(mod, "connect_prepared_backend"):
-                                backend = mod.connect_prepared_backend(root=self.root)
-                                break
-                        except Exception:
-                            pass
         self.backend = backend
         self.timezone_name = timezone_name or os.getenv("TEXT2SQL_TIMEZONE", "Asia/Hong_Kong")
         self.model_profiles = build_model_profiles(
@@ -145,7 +140,7 @@ class AgentRuntime:
             agent_registry=self.agent_registry,
             bot_registry=self.bot_registry,
         )
-        self.memory_store = MemoryStore(self.root / "agent_memory.sqlite")
+        self.memory_store = MemoryStore(self.data_dir / "agent_memory.sqlite")
         self.memory_enabled = (
             env_bool("MEMORY_ENABLED", True)
             if memory_enabled is None
@@ -161,7 +156,7 @@ class AgentRuntime:
             embedding_client=EmbeddingClient(self.embedding_profile),
             enabled=self.memory_enabled,
         )
-        self.result_store = ResultStore(self.root / "agent_results.sqlite")
+        self.result_store = ResultStore(self.data_dir / "agent_results.sqlite")
         self.subagent_runner = SubagentRunner(
             registry=self.agent_registry,
             skill_registry=self.skill_registry,
@@ -176,6 +171,12 @@ class AgentRuntime:
             model_name=orchestrator_profile.model_name,
         )
         self.hook_runner = HookRunner()
+        self.validate_subagents = (
+            env_bool("AGENTWEAVE_VALIDATE_SUBAGENTS", False)
+            if validate_subagents is None
+            else bool(validate_subagents)
+        )
+        self._validated_bot_ids: set[str] = set()
 
     async def ask(
         self,
@@ -191,6 +192,8 @@ class AgentRuntime:
             local_model_logs.append(to_jsonable(log_entry))
 
         bot = self.bot_registry.get(bot_id)
+        if self.validate_subagents:
+            self._validate_bot_subagents_readiness(bot.id)
         context = OrchestratorContext(
             session_id=session_id,
             backend=self.backend,
@@ -395,6 +398,23 @@ class AgentRuntime:
 
     def get_bot(self, bot_id: str) -> dict[str, Any]:
         return self.resource_loader.bot_payload(bot_id)
+
+    def _validate_bot_subagents_readiness(self, bot_id: str) -> None:
+        resolved_bot = self.bot_registry.get(bot_id)
+        if resolved_bot.id in self._validated_bot_ids:
+            return
+        manifests = {manifest.name: manifest for manifest in self.agent_registry.discover()}
+        for subagent_name in resolved_bot.subagents:
+            manifest = manifests.get(subagent_name)
+            if manifest is None:
+                continue
+            try:
+                validate_extension_environment(manifest)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Subagent `{subagent_name}` readiness check failed: {exc}"
+                ) from exc
+        self._validated_bot_ids.add(resolved_bot.id)
 
     def run_session_start_hook(
         self,

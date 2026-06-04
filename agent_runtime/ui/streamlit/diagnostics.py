@@ -117,14 +117,6 @@ def render_execution_runs(
         ("Tool Events", ("tool_call_start", "tool_result", "tool_call_end")),
         ("Memory Events", ("memory_event", "memory_read", "memory_write")),
         ("Resource Events", ("resources_reloaded",)),
-        (
-            "Session Events",
-            (
-                "session_forked",
-                "session_template_started",
-                "session_template_saved",
-            ),
-        ),
         ("Todo Events", ("todo_event",)),
     ]
     for title, kinds in event_groups:

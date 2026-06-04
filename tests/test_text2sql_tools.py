@@ -9,7 +9,19 @@ from agent_runtime.storage.database import CsvSQLiteBackend
 from agent_runtime.core.model_profiles import ModelProfile
 from agent_runtime.storage.result_store import ResultStore
 from agent_runtime.registry.skill_registry import AgentRegistry
-from subagents.text2sql import tools
+from subagents.text2sql import extension as tools
+
+
+def test_text2sql_extension_connects_prepared_backend_from_env(tmp_path, monkeypatch):
+    csv_path = tmp_path / "resources.csv"
+    csv_path.write_text("machine_room\n403\n", encoding="utf-8")
+    monkeypatch.setenv("TEXT2SQL_BACKEND", "csv")
+    monkeypatch.setenv("TEXT2SQL_TABLES_JSON", json.dumps({"resources": str(csv_path)}))
+    monkeypatch.setattr(tools, "_backend_cache", None)
+
+    backend = tools._connect_backend(Path("."))
+
+    assert backend.get_columns("resources") == ["machine_room"]
 
 
 def test_compact_rows_for_tool_limits_cell_text(monkeypatch):
@@ -120,7 +132,12 @@ def test_execute_sql_emits_result_created_ui_event(tmp_path, monkeypatch):
     assert tool_events[-1]["payload"]["status"] == "completed"
 
 
-def test_get_domain_schema_requires_prepared_database_environment():
+def test_get_domain_schema_requires_prepared_database_environment(monkeypatch):
+    monkeypatch.delenv("TEXT2SQL_BACKEND", raising=False)
+    monkeypatch.delenv("TEXT2SQL_DATABASE_URL", raising=False)
+    monkeypatch.delenv("TEXT2SQL_TABLES_JSON", raising=False)
+    monkeypatch.setattr(tools, "_backend_cache", None)
+    monkeypatch.setattr(tools, "_backend_cache_key", None)
     run_ctx = RunContext(
         run_id="schema-missing-db-run",
         backend=None,
@@ -284,7 +301,7 @@ def test_explicit_schema_value_and_sql_generation_steps(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(
-        "subagents.text2sql.scripts.sql_generation.call_chat_model",
+        "subagents.text2sql.core.sql_generation.call_chat_model",
         fake_call_chat_model,
     )
 

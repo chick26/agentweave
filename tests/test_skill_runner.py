@@ -183,6 +183,127 @@ def test_worker_subagent_loads_convention_tools_without_code_registration(tmp_pa
     assert set(agent_tool.params_json_schema["properties"]) == {"task"}
 
 
+def test_worker_subagent_merges_extension_and_custom_tools(tmp_path, monkeypatch):
+    subagents_root = tmp_path / "subagents"
+    subagent_dir = subagents_root / "mixed_worker"
+    subagent_dir.mkdir(parents=True)
+    (subagent_dir / "extension.py").write_text(
+        "from agents import function_tool\n\n"
+        "@function_tool\n"
+        "async def extension_tool(value: str) -> str:\n"
+        "    return value\n\n"
+        "def register(api):\n"
+        "    api.tool(extension_tool)\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "tools.py").write_text(
+        "from agents import function_tool\n\n"
+        "@function_tool\n"
+        "async def custom_extra_tool(value: str) -> str:\n"
+        "    return value\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "AGENT.yaml").write_text(
+        "name: mixed_worker\n"
+        "description: Mixed worker subagent.\n"
+        "execution:\n"
+        "  mode: worker\n"
+        "extension:\n"
+        "  module: subagents.mixed_worker.extension\n"
+        "tools:\n"
+        "  - custom_extra_tool\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "prompt.md").write_text("Mixed worker prompt.\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    registry = AgentRegistry(subagents_root=subagents_root)
+    runner = SubagentRunner(registry=registry, root=tmp_path)
+
+    tools = runner._build_subagent_tools(registry.get("mixed_worker"))
+
+    assert [tool.name for tool in tools] == ["extension_tool", "custom_extra_tool"]
+
+
+def test_worker_subagent_loads_extension_tools_without_tools_py(tmp_path, monkeypatch):
+    subagents_root = tmp_path / "subagents"
+    subagent_dir = subagents_root / "extension_worker"
+    subagent_dir.mkdir(parents=True)
+    (subagent_dir / "extension.py").write_text(
+        "from agents import function_tool\n\n"
+        "@function_tool\n"
+        "async def extension_tool(value: str) -> str:\n"
+        "    return value\n\n"
+        "def build_prompt_context(manifest):\n"
+        "    return {'extra_context': 'from extension'}\n\n"
+        "def register(api):\n"
+        "    api.tool(extension_tool)\n"
+        "    api.prompt_context(build_prompt_context)\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "AGENT.yaml").write_text(
+        "name: extension_worker\n"
+        "description: Extension worker subagent.\n"
+        "execution:\n"
+        "  mode: worker\n"
+        "extension:\n"
+        "  module: subagents.extension_worker.extension\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "prompt.md").write_text(
+        "Extension worker prompt: {extra_context}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    registry = AgentRegistry(subagents_root=subagents_root)
+    runner = SubagentRunner(registry=registry, root=tmp_path)
+    manifest = registry.get("extension_worker")
+
+    tools = runner._build_subagent_tools(manifest)
+
+    assert [tool.name for tool in tools] == ["extension_tool"]
+    assert "from extension" in runner._build_worker_prompt(manifest)
+
+
+def test_worker_subagent_rejects_custom_extension_name_conflict(tmp_path, monkeypatch):
+    subagents_root = tmp_path / "subagents"
+    subagent_dir = subagents_root / "extension_conflict_worker"
+    subagent_dir.mkdir(parents=True)
+    (subagent_dir / "extension.py").write_text(
+        "from agents import function_tool\n\n"
+        "@function_tool\n"
+        "async def shared_tool(value: str) -> str:\n"
+        "    return value\n\n"
+        "def register(api):\n"
+        "    api.tool(shared_tool)\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "tools.py").write_text(
+        "from agents import function_tool\n\n"
+        "@function_tool\n"
+        "async def shared_tool(value: str) -> str:\n"
+        "    return value\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "AGENT.yaml").write_text(
+        "name: extension_conflict_worker\n"
+        "description: Extension conflict worker subagent.\n"
+        "execution:\n"
+        "  mode: worker\n"
+        "extension:\n"
+        "  module: subagents.extension_conflict_worker.extension\n"
+        "tools:\n"
+        "  - shared_tool\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "prompt.md").write_text("Extension conflict prompt.\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    registry = AgentRegistry(subagents_root=subagents_root)
+    runner = SubagentRunner(registry=registry, root=tmp_path)
+
+    with pytest.raises(ValueError, match="conflicts with an extension tool"):
+        runner._build_subagent_tools(registry.get("extension_conflict_worker"))
+
+
 def test_generic_subagent_env_model_role_override(monkeypatch):
     registry = _registry()
     runner = SubagentRunner(registry=registry, root=Path("."))
@@ -270,6 +391,36 @@ def test_worker_prompt_template_replaces_domains_and_memory(tmp_path):
     assert "idc_resources" in prompt
     assert "回答时保留 SQL 口径。" in prompt
     assert "domain_hint" not in prompt
+
+
+def test_worker_prompt_can_use_extension_context(tmp_path, monkeypatch):
+    subagents_root = tmp_path / "subagents"
+    subagent_dir = subagents_root / "context_worker"
+    subagent_dir.mkdir(parents=True)
+    (subagent_dir / "AGENT.yaml").write_text(
+        "name: context_worker\n"
+        "description: Context worker subagent.\n"
+        "execution:\n"
+        "  mode: worker\n"
+        "extension:\n"
+        "  module: subagents.context_worker.extension\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "prompt.md").write_text("Context says: {context_value}\n", encoding="utf-8")
+    (subagent_dir / "extension.py").write_text(
+        "def build_prompt_context(manifest):\n"
+        "    return {'context_value': manifest.name}\n\n"
+        "def register(api):\n"
+        "    api.prompt_context(build_prompt_context)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    registry = AgentRegistry(subagents_root=subagents_root)
+    runner = SubagentRunner(registry=registry, root=tmp_path)
+
+    prompt = runner._build_worker_prompt(registry.get("context_worker"))
+
+    assert prompt == "Context says: context_worker"
 
 
 def test_worker_reads_only_declared_skill_memory(tmp_path):

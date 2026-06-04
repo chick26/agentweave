@@ -22,9 +22,6 @@ STAGE_CONFIG = {
     "tool_call_end": ("✅", "工具完成"),
     "tool_result": ("📦", "工具结果"),
     "resources_reloaded": ("🔄", "重载资源"),
-    "session_forked": ("🌿", "分叉会话"),
-    "session_template_started": ("📋", "从模板启动"),
-    "session_template_saved": ("💾", "保存模板"),
     "todo_update": ("☑️", "更新 Todo"),
 }
 
@@ -47,9 +44,6 @@ VISIBLE_STAGES = {
     "tool_call_end",
     "tool_result",
     "resources_reloaded",
-    "session_forked",
-    "session_template_started",
-    "session_template_saved",
 }
 
 LIVE_VISIBLE_STAGES = VISIBLE_STAGES - {"tool_result", "tool_call_end"}
@@ -232,20 +226,6 @@ def extract_detail(event: dict[str, Any]) -> str:
     elif stage == "resources_reloaded":
         return str(event.get("message") or "")
 
-    elif stage == "session_forked":
-        source = event.get("source_session_id", "")
-        target = event.get("target_session_id", "")
-        copied = event.get("copied_items", 0)
-        return f"`{source}` → `{target}` · {copied} items"
-
-    elif stage in {"session_template_started", "session_template_saved"}:
-        template = event.get("template_name", "")
-        message_count = event.get("message_count", 0)
-        detail = f"`{template}`" if template else ""
-        if message_count:
-            detail += f" · {message_count} messages"
-        return detail
-
     return ""
 
 
@@ -277,13 +257,10 @@ def _event_visibility_key(event: dict[str, Any]) -> tuple[str, str, str]:
         payload.get("tool_name")
         or payload.get("subagent")
         or payload.get("skill")
-        or payload.get("template_id")
         or ""
     )
     detail = str(
         payload.get("result_id")
-        or payload.get("target_session_id")
-        or payload.get("source_session_id")
         or payload.get("input")
         or payload.get("query")
         or ""

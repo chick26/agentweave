@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
-from subagents.text2sql.scripts.domain_catalog import Text2SQLDomainCatalog
+from subagents.text2sql.core.domain_catalog import Text2SQLDomainCatalog
 
 
 def test_agent_registry_loads_subagents_only():
@@ -16,14 +16,12 @@ def test_agent_registry_loads_subagents_only():
     assert text2sql.location.name == "AGENT.yaml"
     assert text2sql.execution.mode == "worker"
     assert text2sql.execution.model_role == "orchestrator"
-    assert text2sql.runtime_env.setup_module == "subagents.text2sql.env"
-    assert text2sql.data.roots == ["subagents/text2sql/data"]
-    assert text2sql.data.globs == ["*.csv"]
-    assert text2sql.data.tables == {
-        "resources": "resources.csv",
-        "sea_cable_faults": "sea_cable_faults.csv",
-    }
-    assert "execute_sql" in text2sql.tools
+    assert text2sql.model.llm_role == "executor"
+    assert text2sql.extension.module == "subagents.text2sql.extension"
+    assert text2sql.data.roots == []
+    assert text2sql.data.globs == []
+    assert text2sql.data.tables == {}
+    assert text2sql.tools == []
     assert "get_domain_schema" in text2sql.body
     assert "数据库查询" in text2sql.routing_hints[0]
     assert text2sql.domains.file == "domain_catalog.yaml"
@@ -63,14 +61,8 @@ def test_agent_yaml_reads_manifest_and_prompt_body():
 
     assert agent.location.name == "AGENT.yaml"
     assert agent.name == "text2sql"
-    assert agent.tools == [
-        "get_current_time",
-        "list_domains",
-        "get_domain_schema",
-        "search_domain_values",
-        "generate_readonly_sql",
-        "execute_sql",
-    ]
+    assert agent.tools == []
+    assert agent.extension.module == "subagents.text2sql.extension"
     assert agent.routing_hints
     assert "可用数据域" in agent.body
 
@@ -85,10 +77,15 @@ def test_yaml_agent_manifest_reads_prompt_and_runtime_metadata(tmp_path):
         "execution:\n"
         "  mode: worker\n"
         "  model_role: orchestrator\n"
-        "runtime_env:\n"
-        "  kind: local\n"
-        "  setup_module: subagents.demo.env\n"
-        "  mode: lazy\n"
+        "extension:\n"
+        "  module: subagents.demo.extension\n"
+        "model:\n"
+        "  llm_role: executor\n"
+        "  llm: demo-chat\n"
+        "  llm_base_url: http://llm/v1\n"
+        "  embedding_role: embedding\n"
+        "  embedding: demo-embedding\n"
+        "  embedding_base_url: http://embedding/v1\n"
         "data:\n"
         "  roots:\n"
         "    - data/demo\n"
@@ -107,9 +104,13 @@ def test_yaml_agent_manifest_reads_prompt_and_runtime_metadata(tmp_path):
     agent = AgentRegistry(subagents_root=subagents_root).get("demo")
 
     assert agent.body == "Prompt body"
-    assert agent.runtime_env.kind == "local"
-    assert agent.runtime_env.setup_module == "subagents.demo.env"
-    assert agent.runtime_env.mode == "lazy"
+    assert agent.extension.module == "subagents.demo.extension"
+    assert agent.model.llm_role == "executor"
+    assert agent.model.llm == "demo-chat"
+    assert agent.model.llm_base_url == "http://llm/v1"
+    assert agent.model.embedding_role == "embedding"
+    assert agent.model.embedding == "demo-embedding"
+    assert agent.model.embedding_base_url == "http://embedding/v1"
     assert agent.data.roots == ["data/demo"]
     assert agent.data.globs == ["*.pdf"]
     assert agent.data.tables == {"docs": "docs.pdf"}
@@ -191,6 +192,31 @@ def test_worker_subagent_defaults_to_orchestrator_model_role(tmp_path):
     manifest = AgentRegistry(subagents_root=subagents_root).get("demo")
 
     assert manifest.execution.model_role == "orchestrator"
+    assert manifest.model.llm_role == ""
+    assert manifest.model.llm == ""
+    assert manifest.model.embedding_role == ""
+    assert manifest.model.embedding == ""
+
+
+def test_extension_only_subagent_does_not_require_tools_py(tmp_path):
+    subagents_root = tmp_path / "subagents"
+    agent_dir = subagents_root / "demo"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "AGENT.yaml").write_text(
+        "name: demo\n"
+        "description: Extension-only worker\n"
+        "execution:\n"
+        "  mode: worker\n"
+        "extension:\n"
+        "  module: subagents.demo.extension\n",
+        encoding="utf-8",
+    )
+    (agent_dir / "prompt.md").write_text("Body\n", encoding="utf-8")
+
+    manifest = AgentRegistry(subagents_root=subagents_root).get("demo")
+
+    assert manifest.extension.module == "subagents.demo.extension"
+    assert manifest.tools == []
 
 
 def test_subagent_contract_rejects_missing_prompt(tmp_path):

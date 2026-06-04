@@ -1,3 +1,10 @@
+from types import SimpleNamespace
+
+from agent_runtime.core.manifest_models import (
+    resolve_manifest_embedding_profile,
+    resolve_manifest_llm_profile,
+)
+from agent_runtime.core.model_profiles import ModelProfile
 from agent_runtime.core.model_profiles import load_model_profiles
 from agent_runtime.memory.embeddings import load_embedding_profile
 
@@ -81,3 +88,62 @@ def test_model_profiles_granular_api_key_fallbacks(monkeypatch):
     assert profiles_default["executor"].api_key == "not-needed"
     assert profiles_default["embedding"].api_key == "not-needed"
 
+
+def test_manifest_llm_profile_resolves_runtime_role_with_overrides():
+    manifest = SimpleNamespace(
+        model=SimpleNamespace(
+            llm_role="executor",
+            llm="manifest-chat",
+            llm_base_url="",
+        )
+    )
+    profiles = {
+        "executor": ModelProfile(
+            role="executor",
+            base_url="http://executor/v1",
+            model_name="executor-chat",
+            api_key="exec-key",
+            max_tokens=2048,
+            context_window=32768,
+        )
+    }
+
+    profile = resolve_manifest_llm_profile(
+        manifest,
+        model_profiles=profiles,
+        default_role="orchestrator",
+    )
+
+    assert profile.role == "executor"
+    assert profile.base_url == "http://executor/v1"
+    assert profile.model_name == "manifest-chat"
+    assert profile.api_key == "exec-key"
+
+
+def test_manifest_embedding_profile_resolves_runtime_role():
+    manifest = SimpleNamespace(
+        model=SimpleNamespace(
+            embedding_role="embedding",
+            embedding="",
+            embedding_base_url="",
+        )
+    )
+    profiles = {
+        "embedding": ModelProfile(
+            role="embedding",
+            base_url="http://embedding/v1",
+            model_name="qwen3-embedding-4b",
+            api_key="emb-key",
+            max_tokens=0,
+            context_window=8192,
+        )
+    }
+
+    profile = resolve_manifest_embedding_profile(
+        manifest,
+        model_profiles=profiles,
+    )
+
+    assert profile.base_url == "http://embedding/v1"
+    assert profile.model_name == "qwen3-embedding-4b"
+    assert profile.api_key == "emb-key"
