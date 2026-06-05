@@ -52,13 +52,9 @@ def test_bot_registry_reads_bot_yaml(tmp_path: Path) -> None:
         "skills:\n"
         "  - data_analysis\n"
         "welcome:\n"
-        "  mode: static\n"
-        "  preset_questions:\n"
-        "    - domain_name: idc_resources\n"
-        "      title: IDC 资源\n"
-        "      questions:\n"
-        "        - 403机房有多少可用机柜？\n"
-        "        - 各机房可用机柜数量排行是什么？\n",
+        "  message: 你好\n"
+        "  preset: true\n"
+        "  prompt: 生成欢迎词\n"
     )
 
     registry = _registry(tmp_path)
@@ -68,17 +64,9 @@ def test_bot_registry_reads_bot_yaml(tmp_path: Path) -> None:
     assert bot.name == "数据分析机器人"
     assert bot.subagents == ["text2sql"]
     assert bot.skills == ["data_analysis"]
-    assert bot.welcome.mode == "static"
-    assert bot.welcome.preset_questions == [
-        {
-            "domain_name": "idc_resources",
-            "title": "IDC 资源",
-            "questions": [
-                "403机房有多少可用机柜？",
-                "各机房可用机柜数量排行是什么？",
-            ],
-        }
-    ]
+    assert bot.welcome.message == "你好"
+    assert bot.welcome.preset is True
+    assert bot.welcome.prompt == "生成欢迎词"
 
 
 def test_bot_registry_generates_default_when_no_bot_files(tmp_path: Path) -> None:

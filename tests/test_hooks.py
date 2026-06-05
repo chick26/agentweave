@@ -1,85 +1,113 @@
-"""Tests for hook execution and preset question aggregation."""
+"""Tests for hook execution and SessionStart welcome rendering."""
 
 from pathlib import Path
 
-from agent_runtime.core.hooks import HookResult, HookRunner, SessionStartContext
-from agent_runtime.core.preset_questions import PresetQuestionGroup, PresetQuestionResult
-from agent_runtime.core.preset_questions import generate_preset_question_result
+from agent_runtime.core.hooks import HookResult, HookRunner
+from agent_runtime.hooks.session_start import (
+    SessionStartContext,
+    build_default_session_start_hooks,
+)
+from agent_runtime.registry.skill_registry import AgentManifest, Skill
 
 
-def _write_subagent(root: Path, name: str, description: str) -> None:
-    subagent_dir = root / "subagents" / name
-    subagent_dir.mkdir(parents=True)
-    (subagent_dir / "AGENT.yaml").write_text(
-        f"name: {name}\n"
-        f"description: {description}\n"
-        "execution:\n"
-        "  mode: worker\n",
-        encoding="utf-8",
-    )
-    (subagent_dir / "prompt.md").write_text(f"{name} prompt.\n", encoding="utf-8")
-
-
-def test_session_start_hook_generates_welcome(monkeypatch):
-    def fake_generate_preset_question_result(**kwargs):
-        return PresetQuestionResult(
-            groups=[
-                PresetQuestionGroup(
-                    domain_name="idc_resources",
-                    title="IDC 资源",
-                    questions=["403机房有多少可用机柜？"],
-                )
-            ],
-            source="model",
-            domains=[{"name": "idc_resources", "description": "IDC 资源"}],
-        )
-
-    monkeypatch.setattr(
-        "agent_runtime.core.hooks.generate_preset_question_result",
-        fake_generate_preset_question_result,
+def _subagent(name: str, description: str) -> AgentManifest:
+    return AgentManifest(
+        name=name,
+        description=description,
+        location=Path("subagents") / name / "AGENT.yaml",
+        kind="subagent",
     )
 
-    result = HookRunner().run(
+
+def _skill(name: str, description: str) -> Skill:
+    return Skill(
+        name=name,
+        description=description,
+        location=Path("skills") / name / "SKILL.md",
+        kind="skill",
+    )
+
+
+def test_session_start_hook_returns_default_welcome_without_resources():
+    result = HookRunner(handlers=build_default_session_start_hooks()).run(
+        "SessionStart",
+        SessionStartContext(),
+    )
+
+    assert result.error == ""
+    assert result.message == "你好，我可以回答已接入能力范围内的问题。"
+    assert result.payload == {"source": "default", "resources": []}
+
+
+def test_session_start_hook_renders_mounted_resource_descriptions():
+    result = HookRunner(handlers=build_default_session_start_hooks()).run(
         "SessionStart",
         SessionStartContext(
-            skills_root=Path("skills"),
-            base_url="http://example.test/v1",
-            model_name="sql",
-            api_key="not-needed",
-            questions_per_domain=1,
+            welcome_message="你好，当前机器人已加载以下能力。",
             memory_context="[project]\n- rule: 保留 SQL 口径",
+            subagents=[
+                _subagent("text2sql", "使用自然语言查询结构化数据，生成并执行只读 SQL。"),
+                _subagent("rag", "基于 Markdown 知识库回答问题，返回带来源的检索片段。"),
+            ],
+            skills=[
+                _skill("data_analysis", "面向表格结果的数据分析方法卡。"),
+            ],
         ),
     )
 
     assert result.error == ""
-    assert "403机房有多少可用机柜？" in result.message
+    assert "你好，当前机器人已加载以下能力。" in result.message
+    assert "当前已接入能力：" in result.message
+    assert "`text2sql`：使用自然语言查询结构化数据，生成并执行只读 SQL。" in result.message
+    assert "`rag`：基于 Markdown 知识库回答问题，返回带来源的检索片段。" in result.message
+    assert "`data_analysis`：面向表格结果的数据分析方法卡。" in result.message
     assert "项目记忆" in result.message
-    assert result.payload["source"] == "model"
-    assert result.payload["domains"] == [{"name": "idc_resources", "description": "IDC 资源"}]
+    assert result.payload["source"] == "descriptions"
+    assert [item["name"] for item in result.payload["resources"]] == [
+        "text2sql",
+        "rag",
+        "data_analysis",
+    ]
 
 
-def test_session_start_hook_fallback_on_error(monkeypatch):
-    def fake_generate_preset_question_result(**kwargs):
-        raise RuntimeError("boom")
+def test_session_start_hook_uses_prompt_when_preset_enabled(monkeypatch):
+    captured = {}
+
+    def fake_generate_welcome_message(context, resources):
+        captured["prompt"] = context.welcome_prompt
+        captured["resources"] = resources
+        return "欢迎使用数据分析机器人。\n- 403机房有多少可用机柜？"
 
     monkeypatch.setattr(
-        "agent_runtime.core.hooks.generate_preset_question_result",
-        fake_generate_preset_question_result,
+        "agent_runtime.hooks.session_start.generate_welcome_message",
+        fake_generate_welcome_message,
     )
 
-    result = HookRunner().run(
+    result = HookRunner(handlers=build_default_session_start_hooks()).run(
         "SessionStart",
         SessionStartContext(
-            skills_root=Path("skills"),
-            base_url="http://example.test/v1",
-            model_name="sql",
-            api_key="not-needed",
+            welcome_preset=True,
+            welcome_prompt="根据能力描述生成示例问题",
+            welcome_model_base_url="http://example.test/v1",
+            welcome_model_name="chat",
+            welcome_model_api_key="not-needed",
+            subagents=[
+                _subagent("text2sql", "使用自然语言查询结构化数据。"),
+            ],
         ),
     )
 
-    assert "你好，我可以回答已接入能力范围内的问题。" == result.message
-    assert "RuntimeError: boom" == result.error
-    assert result.payload["source"] == "fallback"
+    assert result.error == ""
+    assert result.message == "欢迎使用数据分析机器人。\n- 403机房有多少可用机柜？"
+    assert result.payload["source"] == "preset"
+    assert captured["prompt"] == "根据能力描述生成示例问题"
+    assert captured["resources"] == [
+        {
+            "kind": "subagent",
+            "name": "text2sql",
+            "description": "使用自然语言查询结构化数据。",
+        }
+    ]
 
 
 def test_hook_runner_returns_unsupported_event_error() -> None:
@@ -89,27 +117,28 @@ def test_hook_runner_returns_unsupported_event_error() -> None:
     assert result.error == "Unsupported hook event: UnknownEvent"
 
 
+def test_hook_runner_known_event_without_handlers_returns_empty_result() -> None:
+    result = HookRunner().run("SessionStart", object())
+
+    assert result == HookResult()
+
+
 def test_hook_runner_accepts_injected_handler() -> None:
     class FakeHook:
         event_name = "SessionStart"
 
         def run(self, context):
             return HookResult(
-                message=f"fake:{context.model_name}",
+                message=f"fake:{context.welcome_message}",
                 payload={"source": "fake"},
             )
 
     result = HookRunner(handlers=[FakeHook()]).run(
         "SessionStart",
-        SessionStartContext(
-            skills_root=Path("skills"),
-            base_url="http://example.test/v1",
-            model_name="sql",
-            api_key="not-needed",
-        ),
+        SessionStartContext(welcome_message="hello"),
     )
 
-    assert result.message == "fake:sql"
+    assert result.message == "fake:hello"
     assert result.payload == {"source": "fake"}
     assert result.error == ""
 
@@ -161,79 +190,3 @@ def test_hook_runner_supports_injected_pre_tool_result() -> None:
 
     assert result.exit_code == 2
     assert result.message == "inject:get_current_time"
-
-
-def test_preset_questions_fallback_to_generic_subagent_capabilities(tmp_path):
-    _write_subagent(tmp_path, "api_call", "调用外部 API 查询业务状态。")
-
-    result = generate_preset_question_result(
-        subagents_root=tmp_path / "subagents",
-        base_url="http://example.test/v1",
-        model_name="unused",
-        api_key="not-needed",
-    )
-
-    assert result.source == "capabilities"
-    assert result.groups == []
-    assert result.domains == [
-        {"name": "api_call", "description": "调用外部 API 查询业务状态。"}
-    ]
-
-
-def test_preset_questions_loads_bot_welcome_provider(tmp_path, monkeypatch):
-    provider_module = tmp_path / "fake_welcome.py"
-    provider_module.write_text(
-        "from agent_runtime.core.preset_questions import PresetQuestionGroup, PresetQuestionResult\n\n"
-        "def generate_preset_question_result(**kwargs):\n"
-        "    manifest = kwargs['manifest']\n"
-        "    return PresetQuestionResult(\n"
-        "        groups=[PresetQuestionGroup(domain_name=manifest.name, title='API', questions=['查一下接口状态'])],\n"
-        "        source='provider',\n"
-        "        domains=[{'name': manifest.name, 'description': manifest.description}],\n"
-        "    )\n",
-        encoding="utf-8",
-    )
-    monkeypatch.syspath_prepend(str(tmp_path))
-    _write_subagent(tmp_path, "api_call", "调用外部 API 查询业务状态。")
-
-    result = generate_preset_question_result(
-        subagents_root=tmp_path / "subagents",
-        base_url="http://example.test/v1",
-        model_name="unused",
-        api_key="not-needed",
-        welcome_provider_module="fake_welcome",
-    )
-
-    assert result.source == "provider"
-    assert result.groups[0].questions == ["查一下接口状态"]
-    assert result.domains == [{"name": "api_call", "description": "调用外部 API 查询业务状态。"}]
-
-
-def test_preset_questions_static_mode_uses_configured_yaml_groups(tmp_path):
-    _write_subagent(tmp_path, "api_call", "调用外部 API 查询业务状态。")
-
-    result = generate_preset_question_result(
-        subagents_root=tmp_path / "subagents",
-        base_url="http://example.test/v1",
-        model_name="unused",
-        api_key="not-needed",
-        welcome_mode="static",
-        preset_question_groups=[
-            {
-                "domain_name": "api_call",
-                "title": "API 查询",
-                "questions": ["查一下接口状态"],
-            }
-        ],
-    )
-
-    assert result.source == "config"
-    assert result.error == ""
-    assert result.groups == [
-        PresetQuestionGroup(
-            domain_name="api_call",
-            title="API 查询",
-            questions=["查一下接口状态"],
-        )
-    ]
-    assert result.domains == [{"name": "api_call", "description": "调用外部 API 查询业务状态。"}]

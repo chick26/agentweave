@@ -50,7 +50,6 @@ SQL_MAX_OUTPUT_TOKENS = int(os.getenv("EXECUTOR_MAX_TOKENS", "2048"))
 EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "http://localhost:8002/v1")
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "openai-compatible-embedding-model")
 API_KEY = os.getenv("OPENAI_API_KEY", "not-needed")
-PRESET_QUESTIONS_PER_DOMAIN = 2
 
 st.set_page_config(page_title="AgentWeave", layout="wide")
 inject_styles()
@@ -213,7 +212,7 @@ if clear_memory_requested:
         st.error(f"缺少运行时依赖，无法清空记忆：`{exc}`")
 
 
-@st.cache_data(show_spinner="正在根据 Domain 生成预设问题...", ttl=3600)
+@st.cache_data(show_spinner="正在生成欢迎消息...", ttl=3600)
 def get_initial_assistant_message(
     base_url: str,
     model_name: str,
@@ -245,10 +244,6 @@ def get_initial_assistant_message(
         )
         result = runtime.run_session_start_hook(
             session_id=session_id,
-            base_url=sql_base_url,
-            model_name=sql_model_name,
-            api_key=api_key,
-            questions_per_domain=PRESET_QUESTIONS_PER_DOMAIN,
             bot_id=bot_id,
         )
         return result.message

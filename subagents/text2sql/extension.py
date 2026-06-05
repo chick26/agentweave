@@ -28,6 +28,7 @@ from subagents.text2sql.core.sql_generation import generate_sql
 from subagents.text2sql.core.sql_safety import (
     validate_sql_uses_selected_schema,
 )
+from agent_runtime.core.tool_helpers import emit_tool_start, emit_tool_finish
 
 
 SQL_RESULT_SAMPLE_ROWS = int(os.getenv("SQL_RESULT_SAMPLE_ROWS", "50"))
@@ -69,10 +70,6 @@ class LinkedValueInput(BaseModel):
     count: int | None = None
     source: str = "search_domain_values"
     query: str = ""
-
-
-from agent_runtime.core.tool_helpers import emit_tool_start, emit_tool_finish
-
 
 @function_tool
 async def get_current_time(

@@ -32,7 +32,6 @@ class AgentServiceConfig:
     embedding_base_url: str | None = None
     embedding_model_name: str | None = None
     memory_enabled: bool | None = None
-    questions_per_domain: int = 2
 
     @classmethod
     def from_env(cls, root: Path | None = None) -> "AgentServiceConfig":
@@ -53,7 +52,6 @@ class AgentServiceConfig:
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL") or None,
             embedding_model_name=os.getenv("EMBEDDING_MODEL") or None,
             memory_enabled=_optional_bool(os.getenv("MEMORY_ENABLED")),
-            questions_per_domain=int(os.getenv("PRESET_QUESTIONS_PER_DOMAIN", "2")),
         )
 
 
@@ -119,10 +117,6 @@ class AgentService:
         bot = self.get_bot(resolved_bot_id)
         result = self.runtime.run_session_start_hook(
             session_id=session_id,
-            base_url=self.config.sql_base_url or self.config.base_url,
-            model_name=self.config.sql_model_name or self.config.model_name,
-            api_key=self.config.api_key,
-            questions_per_domain=self.config.questions_per_domain,
             bot_id=resolved_bot_id,
         )
         with self._lock:

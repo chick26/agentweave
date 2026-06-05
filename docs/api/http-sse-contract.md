@@ -83,15 +83,9 @@ Response `200`:
   "subagents": ["text2sql", "rag"],
   "skills": ["data_analysis"],
   "welcome": {
-    "mode": "static",
-    "provider_module": "",
-    "preset_questions": [
-      {
-        "domain_name": "idc_resources",
-        "title": "IDC 资源",
-        "questions": ["403机房有多少可用机柜？"]
-      }
-    ]
+    "message": "你好，我可以回答已接入能力范围内的问题。",
+    "preset": true,
+    "prompt": "根据基础欢迎文案和已接入能力描述，生成中文 Markdown 欢迎内容。"
   },
   "resolved": {
     "subagents": [

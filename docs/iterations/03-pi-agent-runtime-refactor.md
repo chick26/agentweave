@@ -43,8 +43,8 @@
 
 - `agent_runtime/core/skill_runner.py`：SubagentRunner、worker agent tool 构建、worker trace 处理。
 - `agent_runtime/core/result_events.py`：从 runtime events 中提取 Result Store metadata。
-- `agent_runtime/core/hooks.py`：hook runner、hook handler 协议和 SessionStart 调度。
-- `agent_runtime/core/preset_questions.py`：首页预设问题生成与欢迎消息格式化。
+- `agent_runtime/core/hooks.py`：hook runner、hook handler 协议等核心机制。
+- `agent_runtime/hooks/session_start.py`：AgentWeave 自定义 SessionStart hook，包含欢迎消息格式化。
 
 公开入口收敛为：
 
@@ -64,7 +64,7 @@ from agent_runtime.registry.skill_registry import AgentRegistry
 
 旧顶层路径如 `agent_runtime.orchestrator`、`agent_runtime.database`、`agent_runtime.skill_registry` 被移除。这是一次有意的 breaking change，用来避免旧边界继续泄漏。
 
-第二轮继续移除了 `agent_runtime.skill_runner`、`agent_runtime.result_events`、`agent_runtime.hooks`、`agent_runtime.preset_questions` 这几个残留顶层路径，不再保留 shim。
+第二轮继续移除了残留顶层运行时路径，不再保留 shim。后续 `agent_runtime.hooks` 重新作为正式自定义 hook 包引入，不再表示旧 shim。
 
 ## Runtime 协议变化
 
@@ -127,13 +127,13 @@ Streamlit Results 页签也改成展示“已存储行数”，避免用户把�
 
 ### 5. Hook 化 Preset Questions
 
-`SessionStart` 不再由 `HookRunner` 内部硬编码调用预设问题生成函数，而是拆成轻量 hook handler：
+`SessionStart` 不再由 `HookRunner` 内部硬编码欢迎内容，而是拆成轻量 hook handler：
 
 - handler 声明 `event_name` 并实现 `run(context) -> HookResult`。
-- 默认注册 `PresetQuestionsSessionStartHook`，维持原有欢迎消息、预设问题和 memory context 提示行为。
+- `AgentRuntime` 显式注册 `agent_runtime/hooks/session_start.py` 中的 `SessionStartHook`。
 - `HookRunner` 按事件名选择第一个匹配 handler 执行；当前不做多 hook 结果合并，避免把简单启动消息机制设计得过重。
 
-这个变化让 preset questions 后续可以被替换、叠加或禁用，而不用继续修改主 hook runner。
+这个变化让欢迎消息成为一个可替换的预置 hook，而不用继续修改主 hook runner。
 
 ## Resource Loading 与声明式扩展
 
@@ -144,7 +144,7 @@ Streamlit Results 页签也改成展示“已存储行数”，避免用户把�
 - subagents：`subagents/*/AGENT.md`
 - domains：`subagents/*/domains/*/DOMAIN.md`
 
-Streamlit 的 Reload Resources 操作会刷新 registry cache、重新计算资源快照、清理预设问题缓存，并记录 `resources_reloaded` 事件。
+Streamlit 的 Reload Resources 操作会刷新 registry cache、重新计算资源快照，并记录 `resources_reloaded` 事件。
 
 同时，manifest 加载从宽松兜底改成更严格：
 
@@ -191,10 +191,10 @@ UI 代码拆到 `agent_runtime.ui.streamlit`：
 重构后的关键变化：
 
 - `agent_runtime` 顶层旧模块删除，分层包成为内部代码标准路径。
-- `skill_runner`、`result_events`、`hooks`、`preset_questions` 这几个残留 runtime 模块迁入 `agent_runtime.core`。
+- `skill_runner`、`result_events` 等残留 runtime 模块迁入 `agent_runtime.core`；自定义 hook 实现收口到正式的 `agent_runtime.hooks` 包。
 - `AgentRuntime` 包级 API 保留，外部最小入口不变。
 - `SubagentRunner` 使用 manifest 动态构建 worker agent tool。
-- `PresetQuestionsSessionStartHook` 成为默认 SessionStart handler，预设问题生成从普通 helper 调用升级为 hook 扩展点。
+- `SessionStartHook` 成为默认 SessionStart handler，由 `AgentRuntime` 显式注册；Bot 可通过 `welcome.preset` 和 `welcome.prompt` 控制是否基于挂载能力描述生成欢迎内容。
 - Text2SQL domain registry 从 subagent manifest 中解析本地 domain root。
 - Diagnostic / Results / Memory / Session Template 等状态都落入明确 storage 子系统。
 - Streamlit 页面只做展示与交互编排。

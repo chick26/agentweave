@@ -96,8 +96,8 @@ sequenceDiagram
     *   通过 `update_todo` 工具动态更新，仅在当前会话生命周期内有效（不持久化）。编排器用其来做多步骤规划与自我进度追踪。
 
 ### 4. 钩子机制（Hooks）
-框架支持事件驱动的钩子扩展（`HookRunner`）。核心结构是“事件名 -> 一组处理函数”，当前支持：
-*   **`SessionStart`**：新会话启动时聚合欢迎消息和 preset questions。具体欢迎页内容由 Bot 的 `BOT.yaml` 中 `welcome` 配置决定；未配置 preset 的 Bot 只展示能力摘要。
+框架支持事件驱动的钩子扩展（`HookRunner`）。`agent_runtime/core/hooks.py` 只保留“事件名 -> 一组处理函数”的核心机制，项目自定义 hook 实现放在 `agent_runtime/hooks/`。当前支持：
+*   **`SessionStart`**：新会话启动时由 `agent_runtime/hooks/session_start.py` 返回欢迎消息。Bot 可配置 `welcome.preset: true`，用 `welcome.prompt` 加已挂载 subagents/skills 的 description 生成欢迎词；未开启时直接展示欢迎文案和能力描述。
 *   **`PreToolUse` / `PostToolUse`**：每次工具或 subagent tool 调用前后触发，可用于只读校验、审计、阻止调用或向模型返回 hook 注入信息。
 
 ## 已接入的能力
@@ -126,13 +126,14 @@ agentweave/
 │   │   ├── skill_runner.py        # 兼容旧导入的 shim
 │   │   ├── context.py             # BaseContext / OrchestratorContext / RunContext
 │   │   ├── events.py              # RuntimeEvent / EventBus
-│   │   ├── hooks.py               # SessionStart/PreToolUse/PostToolUse hook runner
-│   │   ├── preset_questions.py    # 通用 welcome provider 聚合
+│   │   ├── hooks.py               # HookResult/HookRunner 等核心 hook 机制
 │   │   ├── result_events.py       # 从事件流提取 ResultStore metadata
 │   │   ├── compressor.py          # 上下文压缩与 hard trim
 │   │   ├── model_profiles.py      # 模型角色配置
 │   │   ├── settings.py            # 环境变量配置读取
 │   │   └── runtime_utils.py       # 模型日志、SQL 提取、时间工具
+│   ├── hooks/                     # AgentWeave 自定义 hook 实现
+│   │   └── session_start.py       # SessionStart welcome hook
 │   ├── memory/                    # memory/todo/session summary/embedding
 │   ├── storage/                   # database/result/diagnostic store
 │   ├── registry/                  # manifest discovery / resource loader
@@ -158,7 +159,7 @@ agentweave/
 │       └── prepare/               # RAG index 离线构建脚本
 ├── bots/
 │   └── data_analyst/
-│       └── BOT.yaml               # 后端 Bot 配置：挂载能力与 preset questions
+│       └── BOT.yaml               # 后端 Bot 配置：挂载能力与欢迎文案
 ├── skills/
 │   └── data_analysis/
 │       └── SKILL.md               # loadable data-analysis method card

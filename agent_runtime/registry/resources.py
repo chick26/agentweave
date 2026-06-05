@@ -125,9 +125,9 @@ class ResourceLoader:
             **bot.summary(),
             "instructions": bot.instructions,
             "welcome": {
-                "mode": bot.welcome.mode,
-                "provider_module": bot.welcome.provider_module,
-                "preset_questions": list(bot.welcome.preset_questions),
+                "message": bot.welcome.message,
+                "preset": bot.welcome.preset,
+                "prompt": bot.welcome.prompt,
             },
             "resolved": {
                 "subagents": [

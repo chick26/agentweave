@@ -52,7 +52,7 @@ class FakeRuntime:
                 return {
                     **bot,
                     "instructions": "",
-                    "welcome": {"mode": "providers"},
+                    "welcome": {"message": "你好"},
                     "resolved": {"subagents": [], "skills": []},
                 }
         raise ValueError(f"Unknown bot: {bot_id}")

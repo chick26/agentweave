@@ -71,8 +71,7 @@ class AgentRuntime:
 - `_build_tools()` 只暴露当前 Bot 的 subagent tools。
 - `load_skill` 只能读取当前 Bot 挂载的 skill。
 - `SessionStart` welcome 只读取当前 Bot 的 welcome 配置。
-- `welcome.mode: static` 时，首页 preset questions 直接来自 `BOT.yaml`，
-  不调用 Python provider；`providers` 保留给 Bot 级动态生成，`mixed` 可同时使用静态配置和 provider。
+- `welcome.preset: true` 时，`SessionStart` 用 Bot 的 `welcome.prompt` 和已挂载能力描述生成欢迎词；未开启时只展示静态欢迎文案和能力列表。
 
 没有显式配置时，后端生成 `default` Bot，兼容“加载全部能力”的旧行为。
 

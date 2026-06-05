@@ -109,11 +109,13 @@ Orchestrator 以为自己只是调了一个普通的函数，但实际上这个�
 
 ## Hook 系统：旁路扩展
 
-除了常规的 Prompt + Tool，系统还需要一些特定时机的介入。`HookRunner` 负责在生命周期关键节点执行扩展逻辑。
+除了常规的 Prompt + Tool，系统还需要一些特定时机的介入。`HookRunner` 负责在生命周期关键节点执行扩展逻辑；`agent_runtime/core/hooks.py` 只提供机制，AgentWeave 自定义 hook 实现放在 `agent_runtime/hooks/`。
 
 当前支持 **`SessionStart`、`PreToolUse`、`PostToolUse`** 三个事件。
-`SessionStart` 只负责聚合欢迎内容，具体 preset questions 由 Bot 在
-`BOT.yaml` 里通过 `welcome` 配置声明；工具调用前后的 hook 则统一收到
+`SessionStart` 的默认实现负责返回欢迎内容；Bot 在 `BOT.yaml` 里配置
+`welcome.message`。如果设置 `welcome.preset: true`，运行时会把
+`welcome.prompt` 与已挂载能力的 description 一起交给模型生成欢迎词。
+工具调用前后的 hook 则统一收到
 `tool_name`、`input`、`output/status` 等 payload，可用于审计、
 阻断或向模型返回注入信息。
 

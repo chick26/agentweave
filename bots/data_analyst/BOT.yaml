@@ -9,20 +9,13 @@ subagents:
 skills:
   - data_analysis
 welcome:
-  mode: static
-  preset_questions:
-    - domain_name: idc_resources
-      title: IDC 资源
-      questions:
-        - 403机房有多少可用机柜？
-        - 各机房可用机柜数量排行是什么？
-    - domain_name: sea_cable_faults
-      title: 海缆故障
-      questions:
-        - 最近有哪些海缆故障影响城市？
-        - 按故障段统计海缆故障数量。
-    - domain_name: rag
-      title: PDF 知识库
-      questions:
-        - 这份 PDF 主要讲了什么？
-        - 查找文档中和论坛资料相关的关键信息。
+  message: 你好，我可以回答已接入能力范围内的问题。
+  preset: true
+  prompt: |
+    你是数据分析机器人的欢迎词生成器。
+    根据基础欢迎文案和已接入能力描述，生成中文 Markdown 欢迎内容。
+    要求：
+    - 先用一句话说明我能帮助用户做什么。
+    - 然后给出 3 到 5 个用户可以直接提问的示例问题。
+    - 示例问题必须来自已接入能力描述，不要编造未接入能力。
+    - 不要解释生成过程，不要输出 JSON。

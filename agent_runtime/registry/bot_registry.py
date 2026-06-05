@@ -11,12 +11,18 @@ import yaml
 from agent_runtime.common import file_signature
 from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
 
+DEFAULT_WELCOME_MESSAGE = "你好，我可以回答已接入能力范围内的问题。"
+DEFAULT_WELCOME_PROMPT = (
+    "你是当前 Bot 的欢迎词生成器。根据已接入的 subagents 和 skills 描述，"
+    "生成简短中文 Markdown 欢迎词，并给出用户可以直接提问的示例。"
+)
+
 
 @dataclass(frozen=True)
 class BotWelcome:
-    mode: str = "providers"
-    provider_module: str = ""
-    preset_questions: list[dict[str, Any]] = field(default_factory=list)
+    message: str = DEFAULT_WELCOME_MESSAGE
+    preset: bool = False
+    prompt: str = DEFAULT_WELCOME_PROMPT
 
 
 @dataclass(frozen=True)
@@ -151,9 +157,9 @@ def _read_bot(path: Path) -> BotConfig:
         subagents=_as_str_list(metadata.get("subagents", [])),
         skills=_as_str_list(metadata.get("skills", [])),
         welcome=BotWelcome(
-            mode=str(welcome.get("mode") or "providers"),
-            provider_module=str(welcome.get("provider_module") or ""),
-            preset_questions=_preset_question_groups(welcome.get("preset_questions", [])),
+            message=str(welcome.get("message") or DEFAULT_WELCOME_MESSAGE),
+            preset=_as_bool(welcome.get("preset"), default=False),
+            prompt=str(welcome.get("prompt") or DEFAULT_WELCOME_PROMPT),
         ),
         metadata=metadata,
     )
@@ -167,23 +173,14 @@ def _as_str_list(value: Any) -> list[str]:
     return []
 
 
-def _preset_question_groups(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    groups: list[dict[str, Any]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        questions = _as_str_list(item.get("questions", []))
-        domain_name = str(item.get("domain_name") or item.get("name") or "").strip()
-        title = str(item.get("title") or domain_name).strip()
-        if not domain_name or not questions:
-            continue
-        groups.append(
-            {
-                "domain_name": domain_name,
-                "title": title or domain_name,
-                "questions": questions,
-            }
-        )
-    return groups
+def _as_bool(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default

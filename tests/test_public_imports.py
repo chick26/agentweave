@@ -44,10 +44,10 @@ def test_agent_runtime_package_level_api_exports_common_types() -> None:
 def test_new_layered_public_paths_are_available() -> None:
     from agent_runtime.core.context import RunContext
     from agent_runtime.core.hooks import HookRunner
-    from agent_runtime.core.preset_questions import PresetQuestionResult
     from agent_runtime.core.result_events import extract_result_metadata
     from agent_runtime.core.skill_runner import SubagentRunner as CompatSubagentRunner
     from agent_runtime.core.subagent_runner import SubagentRunner
+    from agent_runtime.hooks.session_start import SessionStartContext
     from agent_runtime.memory.memory_manager import MemoryManager
     from agent_runtime.registry.skill_registry import AgentRegistry
     from agent_runtime.registry.bot_registry import BotRegistry
@@ -55,7 +55,7 @@ def test_new_layered_public_paths_are_available() -> None:
 
     assert RunContext.__name__ == "RunContext"
     assert HookRunner.__name__ == "HookRunner"
-    assert PresetQuestionResult.__name__ == "PresetQuestionResult"
+    assert SessionStartContext.__name__ == "SessionStartContext"
     assert extract_result_metadata.__name__ == "extract_result_metadata"
     assert SubagentRunner.__name__ == "SubagentRunner"
     assert CompatSubagentRunner is SubagentRunner
@@ -73,12 +73,10 @@ def test_new_layered_public_paths_are_available() -> None:
         "database",
         "diagnostic_store",
         "embeddings",
-        "hooks",
         "memory_manager",
         "memory_store",
         "model_profiles",
         "orchestrator",
-        "preset_questions",
         "prompts",
         "result_events",
         "result_store",

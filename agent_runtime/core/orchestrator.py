@@ -28,7 +28,10 @@ from agent_runtime.core.hooks import (
     HOOK_INJECT,
     HookResult,
     HookRunner,
+)
+from agent_runtime.hooks.session_start import (
     SessionStartContext,
+    build_default_session_start_hooks,
 )
 from agent_runtime.memory.memory_manager import MemoryManager, TodoItem
 from agent_runtime.memory.memory_store import MemoryStore
@@ -172,7 +175,7 @@ class AgentRuntime:
             reserved_output_tokens=orchestrator_profile.max_tokens,
             model_name=orchestrator_profile.model_name,
         )
-        self.hook_runner = HookRunner()
+        self.hook_runner = HookRunner(handlers=build_default_session_start_hooks())
         self.validate_subagents = (
             env_bool("AGENTWEAVE_VALIDATE_SUBAGENTS", False)
             if validate_subagents is None
@@ -422,27 +425,22 @@ class AgentRuntime:
         self,
         *,
         session_id: str,
-        base_url: str,
-        model_name: str,
-        api_key: str,
-        questions_per_domain: int,
         bot_id: str = "default",
     ) -> HookResult:
         bot = self.bot_registry.get(bot_id)
+        profile = self.model_profiles["orchestrator"]
         return self.hook_runner.run(
             "SessionStart",
             SessionStartContext(
-                skills_root=self.root / "skills",
-                subagents_root=self.root / "subagents",
-                base_url=base_url,
-                model_name=model_name,
-                api_key=api_key,
-                questions_per_domain=questions_per_domain,
+                welcome_message=bot.welcome.message,
+                welcome_preset=bot.welcome.preset,
+                welcome_prompt=bot.welcome.prompt,
+                welcome_model_base_url=profile.base_url,
+                welcome_model_name=profile.model_name,
+                welcome_model_api_key=profile.api_key,
                 memory_context=self.memory_manager.build_orchestrator_context(session_id),
-                subagent_names=bot.subagents,
-                welcome_mode=bot.welcome.mode,
-                welcome_provider_module=bot.welcome.provider_module,
-                preset_question_groups=bot.welcome.preset_questions,
+                subagents=_ordered_subagents(self.agent_registry, bot.subagents),
+                skills=_ordered_skills(self.skill_registry, bot.skills),
             ),
         )
 
@@ -898,6 +896,16 @@ def _read_optional_path(path: Path) -> str:
     if not path.exists() or not path.is_file():
         return ""
     return path.read_text(encoding="utf-8", errors="replace").strip()
+
+
+def _ordered_subagents(registry: AgentRegistry, names: list[str]) -> list[Any]:
+    items = {item.name: item for item in registry.discover()}
+    return [item for name in names if (item := items.get(name)) is not None]
+
+
+def _ordered_skills(registry: SkillRegistry, names: list[str]) -> list[Any]:
+    items = {item.name: item for item in registry.discover()}
+    return [item for name in names if (item := items.get(name)) is not None]
 
 
 def _parse_tool_input_payload(input_json: str) -> dict[str, Any]:
