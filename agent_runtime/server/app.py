@@ -1,3 +1,5 @@
+"""FastAPI application factory and HTTP/SSE route definitions."""
+
 from __future__ import annotations
 
 import json

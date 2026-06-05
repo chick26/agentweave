@@ -1,3 +1,5 @@
+"""Tests for orchestrator tools, subagent readiness, and SQL workflows."""
+
 import asyncio
 import json
 from pathlib import Path

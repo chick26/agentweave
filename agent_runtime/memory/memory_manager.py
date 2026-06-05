@@ -1,3 +1,5 @@
+"""Memory retrieval, write, and todo orchestration for AgentWeave sessions."""
+
 from __future__ import annotations
 
 import hashlib

@@ -1,3 +1,5 @@
+"""Tests for public import aliases and package surface compatibility."""
+
 import importlib
 import sys
 

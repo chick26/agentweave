@@ -1,3 +1,5 @@
+"""Tests for diagnostic run log persistence."""
+
 from __future__ import annotations
 
 import sqlite3

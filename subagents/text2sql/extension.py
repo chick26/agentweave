@@ -1,3 +1,5 @@
+"""Text2SQL subagent extension that registers SQL tools and readiness checks."""
+
 from __future__ import annotations
 
 import os

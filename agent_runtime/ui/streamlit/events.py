@@ -1,3 +1,5 @@
+"""Human-readable formatting for runtime events in Streamlit."""
+
 from __future__ import annotations
 
 from typing import Any

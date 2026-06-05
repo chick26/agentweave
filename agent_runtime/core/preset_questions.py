@@ -1,3 +1,5 @@
+"""Welcome message and preset question providers for bot startup."""
+
 from __future__ import annotations
 
 import json

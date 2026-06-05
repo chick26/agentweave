@@ -1,3 +1,5 @@
+"""Context compaction and emergency trimming utilities for long sessions."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

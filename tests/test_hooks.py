@@ -1,3 +1,5 @@
+"""Tests for hook execution and preset question aggregation."""
+
 from pathlib import Path
 
 from agent_runtime.core.hooks import HookResult, HookRunner, SessionStartContext

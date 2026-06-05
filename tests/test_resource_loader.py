@@ -1,3 +1,5 @@
+"""Tests for aggregate resource discovery used by UI and prompts."""
+
 from pathlib import Path
 
 from agent_runtime.registry.resources import ResourceLoader

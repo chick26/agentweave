@@ -1,3 +1,5 @@
+"""Tests for Streamlit display formatting and sidebar DTOs."""
+
 from agent_runtime.ui.streamlit.formatting import format_count, format_result_option
 from agent_runtime.ui.streamlit.resources import (
     format_reload_summary,

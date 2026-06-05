@@ -9,7 +9,7 @@ Text2SQL and RAG are included worker subagents. The framework is intended to gro
 ## Why AgentWeave
 
 - **Orchestrator + worker isolation**: keep noisy domain work out of the main conversation state.
-- **Manifest-driven extension**: discover subagents from `AGENT.yaml + prompt.md` and skills from `SKILL.md`.
+- **Extension protocol**: discover subagents from `AGENT.yaml + prompt.md`, then let each `extension.py` register its own tools and readiness checks.
 - **Scoped tools**: the Orchestrator sees only high-level subagent tools; each worker owns its local tools.
 - **Memory-aware runtime**: durable memory, session summaries, todo working memory, and optional embedding retrieval.
 - **Result isolation**: large query results are stored in SQLite and represented to models as pointers plus samples.
@@ -45,7 +45,8 @@ sequenceDiagram
 | Concept | Purpose |
 |---|---|
 | Orchestrator | Routes user requests, loads memory/skills when needed, delegates specialized work, and summarizes results. |
-| Subagent | A worker agent declared by `subagents/*/AGENT.yaml + prompt.md`; runs in an isolated context with its own tools. |
+| Subagent | A worker agent declared by `subagents/*/AGENT.yaml + prompt.md`; runs in an isolated context and owns its extension tools. |
+| Extension | A `register(api)` module that registers subagent tools, environment validation, and optional prompt context. |
 | Skill | A reusable method card declared by `skills/*/SKILL.md`; loaded as guidance, not exposed as an executable agent. |
 | Memory | SQLite-backed durable memory with vector, lexical, and recent-record retrieval strategies. |
 | Result Store | SQLite-backed storage for large outputs; models receive `result_id`, row counts, and samples. |
@@ -64,16 +65,18 @@ sequenceDiagram
 ```text
 agentweave/
 ├── app.py                         # Streamlit entrypoint
-├── agent_runtime/                 # Orchestrator, memory, diagnostics, registry, stores
+├── agent_runtime/                 # Orchestrator, extension API, memory, registry, stores
 ├── subagents/
-│   ├── text2sql/                  # Text2SQL worker subagent
-│   └── rag/                       # Markdown RAG worker subagent
+│   ├── text2sql/                  # Text2SQL extension, core logic, prepare scripts
+│   └── rag/                       # Markdown RAG extension, core logic, prepare scripts
 ├── bots/                          # Backend bot configs that scope allowed capabilities
 ├── skills/
 │   └── data_analysis/             # Loadable data analysis method card
 ├── docs/
-│   └── architecture/              # Current architecture docs
+│   ├── architecture/              # Current architecture docs
+│   └── iterations/                # Design iteration notes
 ├── data/                          # Local private data directory, ignored by git
+├── .agentweave/                   # Local runtime state, ignored by git
 ├── tests/                         # Regression tests
 └── .env.example                   # OpenAI-compatible runtime configuration template
 ```
@@ -81,6 +84,7 @@ agentweave/
 ## Documentation
 
 - [Architecture docs](docs/architecture/)
+- [Iteration notes](docs/iterations/)
 
 ## Configuration
 
@@ -113,19 +117,24 @@ by git. Place subagent-local test data under each package's `data/` directory,
 for example `subagents/text2sql/data/` or `subagents/rag/data/`. See each
 subagent's `ENVIRONMENT.md`.
 
+Local generated state lives under `.agentweave/`, including prepared subagent
+env files, prepared SQLite/RAG indexes, memory, result store, and Streamlit
+session diagnostics. The directory is runtime-local and should not be committed.
+
 ## Run
 
 ```bash
 uv sync
+cp .env.example .env
 uv run agentweave-prepare-text2sql --overwrite
 uv run agentweave-prepare-rag
-uv run agentweave-server
+uv run streamlit run app.py
 ```
 
-For the local Streamlit debugging UI:
+For the FastAPI HTTP/SSE server:
 
 ```bash
-uv run streamlit run app.py
+uv run agentweave-server
 ```
 
 ## Test
@@ -141,6 +150,20 @@ uv run pytest
 3. Add `prompt.md` for the worker prompt.
 4. Implement `extension.py` with `register(api)` to register tools, environment checks, and prompt context.
 5. Optionally add `tools.py` for custom extra tools declared in `AGENT.yaml`, plus `ENVIRONMENT.md`, `data/`, `core/`, and `prepare/` for subagent-private logic.
+
+Recommended subagent package shape:
+
+```text
+subagents/<name>/
+├── AGENT.yaml
+├── prompt.md
+├── extension.py      # Required: register(api)
+├── tools.py          # Optional: explicitly declared custom extra tools
+├── ENVIRONMENT.md    # Optional setup notes
+├── data/             # Optional private local fixtures
+├── core/             # Optional pure domain logic
+└── prepare/          # Optional offline preparation scripts
+```
 
 Subagents do not need per-subagent framework tests when they follow this
 contract. The registry validates the package shape at startup.

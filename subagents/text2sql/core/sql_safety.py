@@ -1,3 +1,5 @@
+"""Read-only SQL validation helpers for the Text2SQL subagent."""
+
 from __future__ import annotations
 
 import re

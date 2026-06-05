@@ -1,3 +1,5 @@
+"""SQLite persistence for Streamlit diagnostic run logs."""
+
 from __future__ import annotations
 
 import json

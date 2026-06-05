@@ -1,3 +1,5 @@
+"""Discovery and validation for skills and subagent manifests."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -30,13 +32,6 @@ class ManifestDomains:
 
 
 @dataclass(frozen=True)
-class ManifestData:
-    roots: list[str] = field(default_factory=list)
-    globs: list[str] = field(default_factory=list)
-    tables: dict[str, str] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class ManifestModel:
     llm_role: str = ""
     llm: str = ""
@@ -62,7 +57,6 @@ class ManifestBase:
     tools: list[str] = field(default_factory=list)
     memory: ManifestMemory = field(default_factory=ManifestMemory)
     domains: ManifestDomains = field(default_factory=ManifestDomains)
-    data: ManifestData = field(default_factory=ManifestData)
     model: ManifestModel = field(default_factory=ManifestModel)
     extension: ManifestExtension = field(default_factory=ManifestExtension)
     routing_hints: list[str] = field(default_factory=list)
@@ -223,7 +217,6 @@ class AgentRegistry:
 SkillExecution = ManifestExecution
 SkillMemory = ManifestMemory
 SkillDomains = ManifestDomains
-SkillData = ManifestData
 SkillModel = ManifestModel
 SkillExtension = ManifestExtension
 
@@ -282,7 +275,6 @@ def _build_manifest_from_metadata(
     execution = metadata.get("execution") if isinstance(metadata.get("execution"), dict) else {}
     memory = metadata.get("memory") if isinstance(metadata.get("memory"), dict) else {}
     domains = metadata.get("domains") if isinstance(metadata.get("domains"), dict) else {}
-    data = metadata.get("data") if isinstance(metadata.get("data"), dict) else {}
     model = metadata.get("model") if isinstance(metadata.get("model"), dict) else {}
     extension = metadata.get("extension") if isinstance(metadata.get("extension"), dict) else {}
     execution_mode = str(execution.get("mode", "inline"))
@@ -307,11 +299,6 @@ def _build_manifest_from_metadata(
         domains=ManifestDomains(
             root=str(domains.get("root", "")),
             file=str(domains.get("file", "")),
-        ),
-        data=ManifestData(
-            roots=_as_str_list(data.get("roots", [])),
-            globs=_as_str_list(data.get("globs", [])),
-            tables=_as_str_dict(data.get("tables", {})),
         ),
         model=ManifestModel(
             llm_role=str(model.get("llm_role", "")),
@@ -345,12 +332,6 @@ def _as_str_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
     return []
-
-
-def _as_str_dict(value: Any) -> dict[str, str]:
-    if not isinstance(value, dict):
-        return {}
-    return {str(key): str(item) for key, item in value.items()}
 
 
 def _validate_subagent_contract(manifest: ManifestBase) -> None:

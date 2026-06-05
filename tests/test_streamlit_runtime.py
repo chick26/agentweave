@@ -1,3 +1,5 @@
+"""Tests for Streamlit app module loading behavior."""
+
 import types
 
 from agent_runtime.ui import streamlit as streamlit_ui

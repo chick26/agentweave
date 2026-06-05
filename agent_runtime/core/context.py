@@ -1,3 +1,5 @@
+"""Runtime context objects shared by the orchestrator and worker subagents."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

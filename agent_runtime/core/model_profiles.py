@@ -1,3 +1,5 @@
+"""Model profile definitions loaded from AgentWeave environment variables."""
+
 from __future__ import annotations
 
 import os

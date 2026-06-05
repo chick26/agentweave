@@ -1,3 +1,5 @@
+"""Public exports for the AgentWeave HTTP/SSE server package."""
+
 from agent_runtime.server.app import create_app, create_server
 from agent_runtime.server.service import AgentService, AgentServiceConfig
 

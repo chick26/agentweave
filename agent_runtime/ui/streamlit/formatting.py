@@ -1,3 +1,5 @@
+"""Small display formatting helpers for Streamlit components."""
+
 from __future__ import annotations
 
 from typing import Any

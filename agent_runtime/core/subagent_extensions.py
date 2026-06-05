@@ -1,3 +1,5 @@
+"""Subagent extension registration API and loader."""
+
 from __future__ import annotations
 
 import importlib

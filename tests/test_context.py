@@ -1,3 +1,5 @@
+"""Tests for runtime context event emission and shared worker state."""
+
 from agent_runtime.core.context import BaseContext, OrchestratorContext, RunContext
 from agent_runtime.core.events import EventKind
 from agent_runtime.storage.database import CsvSQLiteBackend

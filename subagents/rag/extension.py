@@ -1,3 +1,5 @@
+"""RAG subagent extension that registers search, summary, and readiness checks."""
+
 from __future__ import annotations
 
 import os

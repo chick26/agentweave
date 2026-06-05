@@ -1,3 +1,5 @@
+"""SQLite result store for large tool outputs and CSV export."""
+
 from __future__ import annotations
 
 import csv

@@ -1,3 +1,5 @@
+"""Capability reload formatting helpers for the Streamlit sidebar."""
+
 from __future__ import annotations
 
 from typing import Any

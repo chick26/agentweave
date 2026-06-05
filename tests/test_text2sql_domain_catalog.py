@@ -1,3 +1,5 @@
+"""Tests for Text2SQL domain catalog loading and formatting."""
+
 from pathlib import Path
 
 import pytest

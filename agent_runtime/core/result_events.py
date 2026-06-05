@@ -1,3 +1,5 @@
+"""Helpers for extracting result-store metadata from runtime events."""
+
 from __future__ import annotations
 
 from typing import Any

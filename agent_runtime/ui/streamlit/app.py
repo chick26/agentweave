@@ -1,3 +1,5 @@
+"""Streamlit UI composition for local AgentWeave debugging sessions."""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +11,7 @@ from typing import Any
 
 import streamlit as st
 
-from agent_runtime.common import agentweave_data_dir, load_runtime_env_files, utc_now_iso
+from agent_runtime.common import agentweave_data_dir, load_local_env_files, utc_now_iso
 from agent_runtime.storage.diagnostic_store import DiagnosticStore
 from agent_runtime.ui.streamlit.chat import render_chat_history, stream_text
 from agent_runtime.ui.streamlit.diagnostics import (
@@ -33,7 +35,7 @@ from agent_runtime.ui.streamlit.styles import inject_styles
 
 
 ROOT = Path(__file__).resolve().parents[3]
-load_runtime_env_files(ROOT)
+load_local_env_files(ROOT)
 DATA_DIR = agentweave_data_dir(ROOT)
 SESSION_DB_PATH = DATA_DIR / "streamlit_sessions.sqlite"
 TEXT2SQL_AGENT_ROOT = ROOT / "subagents" / "text2sql"

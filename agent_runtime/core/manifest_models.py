@@ -1,3 +1,5 @@
+"""Resolve manifest model roles into concrete LLM and embedding profiles."""
+
 from __future__ import annotations
 
 from agent_runtime.core.model_profiles import ModelProfile, load_model_profiles

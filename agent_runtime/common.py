@@ -1,3 +1,5 @@
+"""Shared filesystem, serialization, environment, and formatting helpers."""
+
 from __future__ import annotations
 
 import json
@@ -78,12 +80,12 @@ def load_env_file(path: Path, *, override: bool = False) -> None:
             os.environ[key] = value
 
 
-def load_runtime_env_files(root: Path) -> list[Path]:
-    """Load local runtime env files in the standard AgentWeave order."""
+def load_local_env_files(root: Path) -> list[Path]:
+    """Load local env files in the standard AgentWeave order."""
     paths = [root / ".env"]
-    runtime_env = root / ".agentweave" / "runtime.env"
-    if runtime_env.exists():
-        paths.append(runtime_env)
+    local_override_env = root / ".agentweave" / "runtime.env"
+    if local_override_env.exists():
+        paths.append(local_override_env)
     agentweave_dir = root / ".agentweave"
     if agentweave_dir.is_dir():
         for item in sorted(agentweave_dir.glob("*.env")):

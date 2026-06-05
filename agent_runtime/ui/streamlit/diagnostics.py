@@ -1,3 +1,5 @@
+"""Diagnostic log rendering helpers for the Streamlit interface."""
+
 from __future__ import annotations
 
 import json

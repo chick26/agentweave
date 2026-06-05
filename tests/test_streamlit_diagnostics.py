@@ -1,3 +1,5 @@
+"""Tests for Streamlit diagnostic rendering helpers."""
+
 from agent_runtime.ui.streamlit.diagnostics import _model_call_detail_tabs
 
 

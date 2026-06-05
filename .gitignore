@@ -20,6 +20,8 @@ subagents/*/data/*
 !subagents/*/data/README.md
 
 docs/iterations/
+!docs/iterations/
+!docs/iterations/*.md
 
 # Local frontend handoff docs
 docs/frontend/

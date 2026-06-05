@@ -1,3 +1,5 @@
+"""Worker subagent lifecycle, tool assembly, and result normalization."""
+
 from __future__ import annotations
 
 import asyncio

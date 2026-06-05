@@ -1,3 +1,5 @@
+"""SQLite and CSV-backed read-only database backend abstractions."""
+
 from __future__ import annotations
 
 import csv

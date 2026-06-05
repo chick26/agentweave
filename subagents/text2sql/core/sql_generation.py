@@ -1,3 +1,5 @@
+"""Text2SQL prompt construction and model-backed SQL generation."""
+
 from __future__ import annotations
 
 from typing import Any

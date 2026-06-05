@@ -1,3 +1,5 @@
+"""Hook runner and context objects for runtime extension points."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

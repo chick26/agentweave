@@ -1,3 +1,5 @@
+"""Markdown document loading utilities for the RAG subagent."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

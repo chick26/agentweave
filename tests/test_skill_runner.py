@@ -1,3 +1,5 @@
+"""Tests for worker subagent assembly and result normalization."""
+
 import asyncio
 import json
 from pathlib import Path

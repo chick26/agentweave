@@ -1,3 +1,5 @@
+"""Tests for Text2SQL extension tools and SQL execution flow."""
+
 import asyncio
 import json
 from pathlib import Path

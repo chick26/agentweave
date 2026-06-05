@@ -1,3 +1,5 @@
+"""Structured runtime event types and event bus helpers."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

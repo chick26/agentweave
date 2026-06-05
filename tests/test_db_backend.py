@@ -1,3 +1,5 @@
+"""Tests for SQLite and CSV database backend behavior."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -154,16 +156,23 @@ def test_csv_backend_requires_explicit_table_config(tmp_path, monkeypatch):
         text2sql_extension._connect_backend(tmp_path)
 
 
-def test_text2sql_prepare_can_use_subagent_manifest_data(tmp_path, monkeypatch):
+def test_text2sql_prepare_uses_domain_catalog_tables(tmp_path, monkeypatch):
     monkeypatch.delenv("TEXT2SQL_TABLES_JSON", raising=False)
-    csv_path = tmp_path / "subagents" / "text2sql" / "data" / "resources.csv"
+    subagent_dir = tmp_path / "subagents" / "text2sql"
+    csv_path = subagent_dir / "data" / "resources.csv"
     csv_path.parent.mkdir(parents=True)
     csv_path.write_text("room\n403\n", encoding="utf-8")
+    catalog_path = subagent_dir / "domain_catalog.yaml"
+    catalog_path.write_text(
+        "domains:\n"
+        "  - name: idc_resources\n"
+        "    description: IDC resources\n"
+        "    table: resources\n",
+        encoding="utf-8",
+    )
     manifest = SimpleNamespace(
-        data=SimpleNamespace(
-            roots=["subagents/text2sql/data"],
-            tables={"resources": "resources.csv"},
-        )
+        location=subagent_dir / "AGENT.yaml",
+        domains=SimpleNamespace(file="domain_catalog.yaml"),
     )
 
     assert manifest_csv_tables(root=tmp_path, manifest=manifest) == {"resources": csv_path}

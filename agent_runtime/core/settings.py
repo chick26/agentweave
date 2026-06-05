@@ -1,3 +1,5 @@
+"""Compatibility helpers for constructing model profile collections."""
+
 from __future__ import annotations
 
 from agent_runtime.core.model_profiles import ModelProfile, load_model_profiles

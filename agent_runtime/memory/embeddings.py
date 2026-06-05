@@ -1,3 +1,5 @@
+"""OpenAI-compatible embedding client configuration for memory retrieval."""
+
 from __future__ import annotations
 
 import os

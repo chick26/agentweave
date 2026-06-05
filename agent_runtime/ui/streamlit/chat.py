@@ -1,3 +1,5 @@
+"""Chat rendering helpers for the Streamlit interface."""
+
 from __future__ import annotations
 
 from typing import Any, Iterable

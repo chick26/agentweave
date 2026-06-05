@@ -1,3 +1,5 @@
+"""CSS injection helpers for Streamlit visual styling."""
+
 from __future__ import annotations
 
 import streamlit as st

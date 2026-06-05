@@ -1,3 +1,5 @@
+"""SQLite-backed durable memory store and vector index persistence."""
+
 from __future__ import annotations
 
 import json

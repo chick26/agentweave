@@ -111,12 +111,12 @@ sequenceDiagram
 
 ## 详细文档
 
-`docs/architecture/` 存放当前架构说明，包括 Orchestrator、Memory、Tools、Skill、Text2SQL Subagent 和 Todo。
+`docs/architecture/` 存放当前稳定架构说明，`docs/iterations/` 记录重要迭代过程和设计取舍。
 
 ## 项目结构
 
 ```
-text2sql/
+agentweave/
 ├── app.py                         # Streamlit 入口
 ├── agent_runtime/
 │   ├── common.py                  # 通用 helper：时间、XML、frontmatter、identifier 等
@@ -134,7 +134,7 @@ text2sql/
 │   │   ├── settings.py            # 环境变量配置读取
 │   │   └── runtime_utils.py       # 模型日志、SQL 提取、时间工具
 │   ├── memory/                    # memory/todo/session summary/embedding
-│   ├── storage/                   # database/result/diagnostic/template store
+│   ├── storage/                   # database/result/diagnostic store
 │   ├── registry/                  # manifest discovery / resource loader
 │   ├── server/                    # HTTP/SSE backend API
 │   └── ui/streamlit/              # Streamlit rendering and session actions
@@ -163,9 +163,11 @@ text2sql/
 │   └── data_analysis/
 │       └── SKILL.md               # loadable data-analysis method card
 ├── docs/
-│   └── architecture/              # 当前架构说明
-└── data/
-    └── README.md                  # 全局临时数据目录
+│   ├── architecture/              # 当前架构说明
+│   └── iterations/                # 架构迭代记录
+├── data/
+│   └── README.md                  # 全局临时数据目录
+└── .agentweave/                   # 本地运行态数据，git ignore
 ```
 
 ## 新增 Subagent
@@ -260,9 +262,8 @@ domains:
       这里写业务口径、过滤规则和值链接提示。
 ```
 
-2. 在 `subagents/text2sql/AGENT.yaml` 的 `data.tables` 中添加表名到 CSV 文件的映射。
-3. 将本地测试 CSV 放到 `subagents/text2sql/data/`。
-4. 重新准备本地 SQLite：
+2. 将本地测试 CSV 放到 `subagents/text2sql/data/`，默认文件名使用 `<table>.csv`，例如 `my_table.csv`。
+3. 重新准备本地 SQLite：
 
 ```bash
 uv run agentweave-prepare-text2sql --overwrite
@@ -296,7 +297,7 @@ Text2SQL 数据库访问是严格前置流程：runtime 不自动加载 CSV、�
 uv run agentweave-prepare-text2sql --overwrite
 ```
 
-该命令会读取 `subagents/text2sql/AGENT.yaml` 的 `data.tables` 映射，把 `subagents/text2sql/data/` 下的本地 CSV 构建为 `.agentweave/text2sql.sqlite`，并生成 `.agentweave/text2sql.env`：
+该命令会根据 `subagents/text2sql/domain_catalog.yaml` 中的 table 名称，读取 `subagents/text2sql/data/<table>.csv`，构建 `.agentweave/text2sql.sqlite`，并生成 `.agentweave/text2sql.env`：
 
 ```bash
 TEXT2SQL_BACKEND=sqlite
@@ -306,6 +307,18 @@ TEXT2SQL_DATABASE_URL=sqlite:////absolute/path/to/.agentweave/text2sql.sqlite
 启动 Streamlit 或 FastAPI 时会自动加载 `.env` 和 `.agentweave/text2sql.env`。如果要连接真实只读 SQLite 数据库，直接编辑 `.agentweave/text2sql.env` 即可。
 
 后端统一执行只读 SQL：仅允许单条 `SELECT` 或只读 `WITH` 查询，禁止写入、DDL、`PRAGMA`、`ATTACH` 等危险语句。
+
+## 本地运行态目录
+
+`.agentweave/` 统一存放本地生成或运行中的状态文件，不应提交到 git：
+
+- `runtime.env`：本地覆盖配置。
+- `text2sql.env` / `rag.env`：prepare 脚本生成的 subagent 环境。
+- `text2sql.sqlite`：本地 Text2SQL SQLite 数据库。
+- `rag_index.json`：本地 RAG Markdown 索引。
+- `agent_memory.sqlite`：长期记忆与向量索引。
+- `agent_results.sqlite`：大结果 Result Store。
+- `streamlit_sessions.sqlite` / `server_sessions.sqlite`：会话与诊断日志。
 
 ## 查询结果存储
 

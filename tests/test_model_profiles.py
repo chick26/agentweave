@@ -1,3 +1,5 @@
+"""Tests for model and embedding profile resolution."""
+
 from types import SimpleNamespace
 
 from agent_runtime.core.manifest_models import (

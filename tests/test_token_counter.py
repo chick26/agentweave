@@ -1,3 +1,5 @@
+"""Tests for token counter selection and fallback behavior."""
+
 import sys
 from types import SimpleNamespace
 

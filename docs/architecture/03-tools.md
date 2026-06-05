@@ -33,7 +33,7 @@ class ManifestBase:
     tools: list[str]       # 该 Subagent 自己的工具列表
     memory: ManifestMemory # 该组件需要的 memory namespace
     domains: ManifestDomains
-    data: ManifestData
+    model: ManifestModel
     extension: ManifestExtension
     routing_hints: list[str] # 意图路由的触发词
     metadata: dict

@@ -1,3 +1,5 @@
+"""CLI for preparing local Text2SQL SQLite databases from CSV fixtures."""
+
 from __future__ import annotations
 
 import argparse
@@ -12,7 +14,7 @@ from subagents.text2sql.core.domain_catalog import Text2SQLDomainCatalog
 
 
 def prepare_sqlite_database(*, root: Path, output: Path, overwrite: bool = False) -> Path:
-    """Build a local SQLite database from Text2SQL manifest-declared CSV files."""
+    """Build a local SQLite database from Text2SQL domain CSV files."""
     manifest = AgentRegistry(subagents_root=root / "subagents").get("text2sql")
     tables = manifest_csv_tables(root=root, manifest=manifest)
     missing = [str(path) for path in tables.values() if not path.exists()]
@@ -61,33 +63,11 @@ def write_text2sql_env_file(*, root: Path, database_path: Path, env_file: Path) 
 
 def manifest_csv_tables(*, root: Path, manifest: Any) -> dict[str, Path]:
     """Resolve local CSV files for Text2SQL prepare-time SQLite generation."""
-    if manifest.data.tables:
-        data_root = _data_root(root=root, manifest=manifest)
-        return {
-            str(table): _resolve_data_path(data_root, str(filename))
-            for table, filename in manifest.data.tables.items()
-        }
     data_root = root / "subagents" / "text2sql" / "data"
     return {
         domain.table: data_root / f"{domain.table}.csv"
         for domain in Text2SQLDomainCatalog.from_agent(manifest).list_domains()
     }
-
-
-def _data_root(*, root: Path, manifest: Any) -> Path:
-    if not manifest.data.roots:
-        raise ValueError("Text2SQL manifest data.roots is required.")
-    data_root = Path(manifest.data.roots[0]).expanduser()
-    if data_root.is_absolute():
-        return data_root
-    return root / data_root
-
-
-def _resolve_data_path(data_root: Path, filename: str) -> Path:
-    path = Path(filename).expanduser()
-    if path.is_absolute():
-        return path
-    return data_root / path
 
 
 def _load_csv_table(connection: sqlite3.Connection, table: str, csv_path: Path) -> None:

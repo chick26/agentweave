@@ -1,3 +1,5 @@
+"""Tests for context compression, token estimation, and trim fallbacks."""
+
 import asyncio
 
 from agent_runtime.core.compressor import ContextCompressor, emergency_trim, estimate_tokens, micro_compact

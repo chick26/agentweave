@@ -1,3 +1,5 @@
+"""Tests for runtime event creation and sequencing."""
+
 from agent_runtime.core.events import EventBus, EventKind, RuntimeEvent, make_event
 
 

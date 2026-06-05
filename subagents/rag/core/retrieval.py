@@ -1,3 +1,5 @@
+"""RAG index construction, loading, summary metadata, and semantic search."""
+
 from __future__ import annotations
 
 import json

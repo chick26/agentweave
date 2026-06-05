@@ -1,3 +1,5 @@
+"""Runtime utility functions for JSON, model calls, SQL snippets, and time."""
+
 from __future__ import annotations
 
 import json

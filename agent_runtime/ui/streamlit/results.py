@@ -1,3 +1,5 @@
+"""Result-store browsing components for Streamlit."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

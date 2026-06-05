@@ -1,3 +1,5 @@
+"""Aggregate registry resources for UI and prompt-facing capability views."""
+
 from __future__ import annotations
 
 import os

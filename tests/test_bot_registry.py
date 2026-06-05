@@ -1,3 +1,5 @@
+"""Tests for bot manifest discovery and capability scoping."""
+
 from pathlib import Path
 
 import pytest

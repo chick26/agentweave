@@ -1,3 +1,5 @@
+"""Streamlit application entrypoint for the local AgentWeave UI."""
+
 from agent_runtime.ui.streamlit import run_app
 
 

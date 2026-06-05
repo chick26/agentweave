@@ -1,3 +1,5 @@
+"""Tests for skill and subagent manifest parsing and validation."""
+
 from pathlib import Path
 
 import pytest
@@ -18,9 +20,6 @@ def test_agent_registry_loads_subagents_only():
     assert text2sql.execution.model_role == "orchestrator"
     assert text2sql.model.llm_role == "executor"
     assert text2sql.extension.module == "subagents.text2sql.extension"
-    assert text2sql.data.roots == []
-    assert text2sql.data.globs == []
-    assert text2sql.data.tables == {}
     assert text2sql.tools == []
     assert "get_domain_schema" in text2sql.body
     assert "数据库查询" in text2sql.routing_hints[0]
@@ -86,13 +85,6 @@ def test_yaml_agent_manifest_reads_prompt_and_runtime_metadata(tmp_path):
         "  embedding_role: embedding\n"
         "  embedding: demo-embedding\n"
         "  embedding_base_url: http://embedding/v1\n"
-        "data:\n"
-        "  roots:\n"
-        "    - data/demo\n"
-        "  globs:\n"
-        "    - '*.pdf'\n"
-        "  tables:\n"
-        "    docs: docs.pdf\n"
         "tools:\n"
         "  - search\n",
         encoding="utf-8",
@@ -111,9 +103,6 @@ def test_yaml_agent_manifest_reads_prompt_and_runtime_metadata(tmp_path):
     assert agent.model.embedding_role == "embedding"
     assert agent.model.embedding == "demo-embedding"
     assert agent.model.embedding_base_url == "http://embedding/v1"
-    assert agent.data.roots == ["data/demo"]
-    assert agent.data.globs == ["*.pdf"]
-    assert agent.data.tables == {"docs": "docs.pdf"}
 
 
 def test_legacy_agent_md_manifest_is_not_a_subagent(tmp_path):

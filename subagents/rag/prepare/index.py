@@ -1,3 +1,5 @@
+"""CLI for preparing the local Markdown RAG index."""
+
 from __future__ import annotations
 
 import argparse
@@ -9,7 +11,7 @@ from typing import Callable
 
 from openai import OpenAI
 
-from agent_runtime.common import load_runtime_env_files
+from agent_runtime.common import load_local_env_files
 from agent_runtime.core.manifest_models import (
     resolve_manifest_embedding_profile,
     resolve_manifest_llm_profile,
@@ -96,7 +98,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     root = Path(args.root).resolve()
-    load_runtime_env_files(root)
+    load_local_env_files(root)
     os.environ.setdefault("EMBEDDING_CLIENT_TIMEOUT", "60")
     output = prepare_rag_index(
         root=root,
@@ -120,8 +122,8 @@ def _embedding_client_from_manifest(manifest) -> EmbeddingClient:
 
 
 def _knowledge_paths(*, runtime_root: Path, manifest) -> list[Path]:
-    roots = manifest.data.roots if manifest is not None and manifest.data.roots else ["subagents/rag/data"]
-    globs = manifest.data.globs if manifest is not None and manifest.data.globs else ["*.md"]
+    roots = ["subagents/rag/data"]
+    globs = ["*.md"]
     paths: list[Path] = []
     for raw_root in roots:
         base = Path(raw_root)

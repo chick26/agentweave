@@ -1,3 +1,5 @@
+"""Tests for the SQLite durable memory store."""
+
 from agent_runtime.memory.memory_store import MemoryStore
 
 

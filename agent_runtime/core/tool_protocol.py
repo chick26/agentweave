@@ -1,3 +1,5 @@
+"""Lightweight protocol data structures for internal tool calls."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -22,4 +24,3 @@ class ToolOutput:
         if isinstance(self.llm_content, str):
             return self.llm_content
         return json_dumps(self.llm_content)
-

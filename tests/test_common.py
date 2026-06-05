@@ -1,9 +1,11 @@
+"""Tests for shared helpers such as env loading and data formatting."""
+
 import os
 
 from agent_runtime.common import (
     coerce_bool,
     columns_from_rows,
-    load_runtime_env_files,
+    load_local_env_files,
     split_frontmatter,
     utc_now_iso,
     xml_escape,
@@ -41,7 +43,7 @@ def test_split_frontmatter_rejects_invalid_yaml():
         split_frontmatter("---\nname: [broken\n---\nBody")
 
 
-def test_load_runtime_env_files_uses_standard_local_files(tmp_path, monkeypatch):
+def test_load_local_env_files_uses_standard_local_files(tmp_path, monkeypatch):
     monkeypatch.delenv("AGENTWEAVE_TEST_VALUE", raising=False)
     (tmp_path / ".env").write_text("AGENTWEAVE_TEST_VALUE=from-dot-env\n", encoding="utf-8")
     env_dir = tmp_path / ".agentweave"
@@ -52,7 +54,7 @@ def test_load_runtime_env_files_uses_standard_local_files(tmp_path, monkeypatch)
         encoding="utf-8",
     )
 
-    loaded = load_runtime_env_files(tmp_path)
+    loaded = load_local_env_files(tmp_path)
 
     assert [path.name for path in loaded] == [".env", "text2sql.env"]
     assert os.environ["AGENTWEAVE_TEST_VALUE"] == "from-dot-env"

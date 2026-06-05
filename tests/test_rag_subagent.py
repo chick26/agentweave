@@ -1,3 +1,5 @@
+"""Tests for RAG indexing, summary metadata, and extension tools."""
+
 import asyncio
 import json
 from pathlib import Path
@@ -38,22 +40,17 @@ def test_rag_manifest_declares_local_markdown_data():
     assert manifest.location.name == "AGENT.yaml"
     assert manifest.body.startswith("你是 RAG Knowledge Subagent")
     assert manifest.extension.module == "subagents.rag.extension"
-    assert manifest.data.roots == []
-    assert manifest.data.globs == []
     assert manifest.tools == []
     assert manifest.model.llm_role == "executor"
     assert manifest.model.embedding_role == "embedding"
 
 
-def test_rag_knowledge_paths_use_manifest_data_roots(tmp_path):
+def test_rag_knowledge_paths_use_subagent_data_dir(tmp_path):
     md_path = tmp_path / "subagents" / "rag" / "data" / "demo.md"
     md_path.parent.mkdir(parents=True)
     md_path.write_text("# Demo\nknowledge", encoding="utf-8")
-    manifest = SimpleNamespace(
-        data=SimpleNamespace(roots=["subagents/rag/data"], globs=["*.md"])
-    )
 
-    paths = prepare_index._knowledge_paths(runtime_root=tmp_path, manifest=manifest)
+    paths = prepare_index._knowledge_paths(runtime_root=tmp_path, manifest=SimpleNamespace())
 
     assert paths == [md_path]
 

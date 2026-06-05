@@ -1,3 +1,5 @@
+"""Tests for FastAPI route behavior and request validation."""
+
 from __future__ import annotations
 
 from pathlib import Path
