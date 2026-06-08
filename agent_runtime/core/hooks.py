@@ -5,15 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-HOOK_PASS = 0
-HOOK_BLOCK = 1
-HOOK_INJECT = 2
-DEFAULT_HOOK_EVENTS = {"SessionStart", "PreToolUse", "PostToolUse"}
+DEFAULT_HOOK_EVENTS = {"SessionStart"}
 
 
 @dataclass(frozen=True)
 class HookResult:
-    exit_code: int = HOOK_PASS
     message: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
     error: str = ""
@@ -38,14 +34,14 @@ class HookRunner:
             return HookResult()
         if not handlers:
             return HookResult(error=f"Unsupported hook event: {event_name}")
+        results: list[HookResult] = []
         for handler in handlers:
             try:
                 result = handler.run(context)
             except Exception as exc:
                 return _hook_error_result(event_name, exc)
-            if result.exit_code in (HOOK_BLOCK, HOOK_INJECT):
-                return result
-        return result if handlers else HookResult()
+            results.append(result)
+        return _aggregate_hook_results(results)
 
 
 def _normalize_handlers(
@@ -63,4 +59,30 @@ def _hook_error_result(event_name: str, exc: Exception) -> HookResult:
     return HookResult(
         payload={"source": "hook_error"},
         error=f"{type(exc).__name__}: {exc}",
+    )
+
+
+def _aggregate_hook_results(results: list[HookResult]) -> HookResult:
+    if not results:
+        return HookResult()
+    if len(results) == 1:
+        return results[0]
+    messages = [result.message for result in results if result.message]
+    errors = [result.error for result in results if result.error]
+    payload: dict[str, Any] = {}
+    handler_results: list[dict[str, Any]] = []
+    for result in results:
+        payload.update(result.payload)
+        handler_results.append(
+            {
+                "message": result.message,
+                "payload": result.payload,
+                "error": result.error,
+            }
+        )
+    payload["handler_results"] = handler_results
+    return HookResult(
+        message="\n\n".join(messages),
+        payload=payload,
+        error="; ".join(errors),
     )

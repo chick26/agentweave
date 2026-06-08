@@ -100,8 +100,8 @@ adapters behind the same `DatabaseBackend` protocol when needed.
 Text2SQL uses:
 
 ```bash
-export QWEN36_BASE_URL=http://localhost:8000/v1
-export QWEN36_MODEL=qwen3.6-27b
+export ORCHESTRATOR_BASE_URL=http://localhost:8000/v1
+export ORCHESTRATOR_MODEL=qwen3.6-27b
 export EXECUTOR_BASE_URL=http://localhost:8001/v1
 export EXECUTOR_MODEL=qwen3-32b
 export EMBEDDING_BASE_URL=http://localhost:8002/v1

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 from pathlib import Path
@@ -11,13 +10,13 @@ from typing import Callable
 
 from openai import OpenAI
 
-from agent_runtime.common import load_local_env_files
-from agent_runtime.core.manifest_models import (
+from agent_runtime.shared.common import load_local_env_files
+from agent_runtime.shared.embeddings import EmbeddingClient
+from agent_runtime.shared.manifest import load_subagent_manifest
+from agent_runtime.shared.models import (
     resolve_manifest_embedding_profile,
-    resolve_manifest_llm_profile,
+    resolve_model_role_profile,
 )
-from agent_runtime.memory.embeddings import EmbeddingClient
-from agent_runtime.registry.skill_registry import AgentRegistry
 from subagents.rag.core.markdown_loader import load_markdown_documents
 from subagents.rag.core.retrieval import build_knowledge_index, write_knowledge_index
 
@@ -35,7 +34,7 @@ def prepare_rag_index(
         output = root / output
     if output.exists() and not overwrite:
         return output
-    manifest = AgentRegistry(subagents_root=root / "subagents").get("rag")
+    manifest = load_subagent_manifest(root, "rag")
     knowledge_paths = _knowledge_paths(runtime_root=root, manifest=manifest)
     if not knowledge_paths:
         raise FileNotFoundError("No Markdown files found under RAG data roots.")
@@ -134,14 +133,13 @@ def _knowledge_paths(*, runtime_root: Path, manifest) -> list[Path]:
     return sorted(set(paths), key=lambda path: str(path))
 
 
-def _summary_callable_from_manifest(manifest) -> Callable[[str], str]:
-    profile = resolve_manifest_llm_profile(
-        manifest,
-        api_key=os.getenv("RAG_SUMMARY_API_KEY") or None,
-    )
+def _summary_callable_from_manifest(_manifest) -> Callable[[str], str]:
+    role = os.getenv("RAG_SUMMARY_MODEL_ROLE", "executor")
+    profile = resolve_model_role_profile(role)
+    api_key = os.getenv("RAG_SUMMARY_API_KEY") or profile.api_key
     client = OpenAI(
         base_url=profile.base_url,
-        api_key=profile.api_key,
+        api_key=api_key,
         timeout=float(os.getenv("RAG_SUMMARY_CLIENT_TIMEOUT", "60")),
         max_retries=int(os.getenv("RAG_SUMMARY_CLIENT_MAX_RETRIES", "2")),
     )
@@ -149,7 +147,7 @@ def _summary_callable_from_manifest(manifest) -> Callable[[str], str]:
         1,
         min(1024, int(os.getenv("RAG_SUMMARY_MAX_TOKENS", str(profile.max_tokens or 1024)))),
     )
-    extra_body = _summary_extra_body(profile.model_name)
+    extra_body = _summary_extra_body(profile)
 
     def call(prompt: str) -> str:
         response = client.chat.completions.create(
@@ -170,18 +168,8 @@ def _summary_callable_from_manifest(manifest) -> Callable[[str], str]:
     return call
 
 
-def _summary_extra_body(model_name: str) -> dict[str, object]:
-    raw_extra = os.getenv("RAG_SUMMARY_EXTRA_BODY", "").strip()
-    if raw_extra:
-        try:
-            payload = json.loads(raw_extra)
-            return payload if isinstance(payload, dict) else {}
-        except json.JSONDecodeError:
-            return {}
-    lowered = model_name.lower()
-    if "qwen" in lowered or "thinking" in lowered:
-        return {"chat_template_kwargs": {"enable_thinking": False}}
-    return {}
+def _summary_extra_body(profile) -> dict[str, object]:
+    return dict(getattr(profile, "extra_body", {}) or {})
 
 
 def _clean_summary_output(text: str) -> str:

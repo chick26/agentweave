@@ -8,21 +8,11 @@ from types import SimpleNamespace
 import pytest
 from agents.tool_context import ToolContext
 
-from agent_runtime.core.context import OrchestratorContext, RunContext
-from agent_runtime.core.hooks import HookResult, HookRunner
+from agent_runtime.core.context import RuntimeContext
 from agent_runtime.storage.database import CsvSQLiteBackend
-from agent_runtime.memory.memory_manager import TodoItem
+from agent_runtime.memory.todo_state import TodoItem
 from agent_runtime.core.orchestrator import AgentRuntime
 from agent_runtime.core.prompts import SYSTEM_PROMPT
-
-
-def _text2sql_test_backend() -> CsvSQLiteBackend:
-    return CsvSQLiteBackend(
-        {
-            "resources": Path("subagents/text2sql/data/resources.csv"),
-            "sea_cable_faults": Path("subagents/text2sql/data/sea_cable_faults.csv"),
-        }
-    )
 
 
 def test_runtime_local_sqlite_stores_live_under_agentweave(tmp_path):
@@ -31,7 +21,6 @@ def test_runtime_local_sqlite_stores_live_under_agentweave(tmp_path):
     session_path = tmp_path / ".agentweave" / "streamlit_sessions.sqlite"
 
     runtime = AgentRuntime(
-        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -71,6 +60,7 @@ def test_runtime_readiness_checks_only_selected_bot_subagents(tmp_path, monkeypa
             f"description: {name} worker\n"
             "execution:\n"
             "  mode: worker\n"
+            "  model_role: orchestrator\n"
             "extension:\n"
             f"  module: subagents.{name}.extension\n",
             encoding="utf-8",
@@ -102,7 +92,6 @@ def test_runtime_readiness_checks_only_selected_bot_subagents(tmp_path, monkeypa
 
 def test_orchestrator_exposes_only_runtime_tools():
     runtime = AgentRuntime(
-        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -118,7 +107,6 @@ def test_orchestrator_exposes_only_runtime_tools():
         "memory_search",
         "memory_write",
         "load_skill",
-        "update_todo",
         "text2sql",
     } <= tool_names
     assert "run_skill" not in tool_names
@@ -126,6 +114,7 @@ def test_orchestrator_exposes_only_runtime_tools():
     assert "search_values" not in tool_names
     assert "generate_sql" not in tool_names
     assert "execute_sql" not in tool_names
+    assert "update_todo" not in tool_names
 
     text2sql = next(tool for tool in runtime._build_tools() if tool.name == "text2sql")
     assert set(text2sql.params_json_schema["properties"]) == {"task"}
@@ -134,9 +123,23 @@ def test_orchestrator_exposes_only_runtime_tools():
     assert "domain_hint" not in text2sql.description
 
 
+def test_todo_tool_is_opt_in(monkeypatch):
+    monkeypatch.setenv("AGENTWEAVE_ENABLE_TODO_TOOL", "1")
+    runtime = AgentRuntime(
+        base_url="http://example.test/v1",
+        model_name="orchestrator",
+        api_key="not-needed",
+        session_db_path=Path("/tmp/test_orchestrator_todo_tool.sqlite"),
+        memory_enabled=False,
+    )
+
+    tool_names = {tool.name for tool in runtime._build_tools()}
+
+    assert "update_todo" in tool_names
+
+
 def test_orchestrator_hides_memory_surface_when_disabled(tmp_path):
     runtime = AgentRuntime(
-        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -157,112 +160,17 @@ def test_orchestrator_hides_memory_surface_when_disabled(tmp_path):
     assert "不要注入这条记忆。" not in instructions
 
 
-def test_pre_tool_hook_can_block_runtime_tool(tmp_path):
+def test_runtime_tools_are_not_wrapped_by_tool_hooks(tmp_path):
     runtime = AgentRuntime(
-        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
     )
-
-    class BlockTimeHook:
-        event_name = "PreToolUse"
-
-        def run(self, payload):
-            return HookResult(exit_code=1, message=f"blocked:{payload['tool_name']}")
-
-    runtime.hook_runner = HookRunner(handlers=[BlockTimeHook()])
     tool = next(tool for tool in runtime._build_tools() if tool.name == "get_current_time")
-    context = OrchestratorContext(
+    context = RuntimeContext(
+        run_id="abc",
         session_id="abc",
-        backend=runtime.backend,
-        model_profiles=runtime.model_profiles,
-    )
-
-    output = asyncio.run(
-        tool.on_invoke_tool(
-            ToolContext(
-                context=context,
-                tool_name="get_current_time",
-                tool_call_id="call_1",
-                tool_arguments=json.dumps({"timezone_name": ""}),
-            ),
-            json.dumps({"timezone_name": ""}),
-        )
-    )
-
-    payload = json.loads(output)
-    assert payload["blocked"] is True
-    assert payload["error"] == "blocked:get_current_time"
-    assert context.events[-1]["payload"]["status"] == "blocked"
-
-
-def test_pre_tool_hook_injection_is_returned_to_model(tmp_path):
-    runtime = AgentRuntime(
-        backend=_text2sql_test_backend(),
-        base_url="http://example.test/v1",
-        model_name="orchestrator",
-        api_key="not-needed",
-        session_db_path=tmp_path / "sessions.sqlite",
-    )
-
-    class InjectHook:
-        event_name = "PreToolUse"
-
-        def run(self, payload):
-            return HookResult(exit_code=2, message="use explicit timezone")
-
-    runtime.hook_runner = HookRunner(handlers=[InjectHook()])
-    tool = next(tool for tool in runtime._build_tools() if tool.name == "get_current_time")
-    context = OrchestratorContext(
-        session_id="abc",
-        backend=runtime.backend,
-        model_profiles=runtime.model_profiles,
-    )
-
-    output = asyncio.run(
-        tool.on_invoke_tool(
-            ToolContext(
-                context=context,
-                tool_name="get_current_time",
-                tool_call_id="call_1",
-                tool_arguments=json.dumps({"timezone_name": ""}),
-            ),
-            json.dumps({"timezone_name": ""}),
-        )
-    )
-
-    payload = json.loads(output)
-    assert payload["hook_injection"] == {
-        "source": "pre_tool_use",
-        "message": "use explicit timezone",
-    }
-    assert payload["timezone"] == runtime.timezone_name
-
-
-def test_post_tool_hook_receives_output_payload(tmp_path):
-    runtime = AgentRuntime(
-        backend=_text2sql_test_backend(),
-        base_url="http://example.test/v1",
-        model_name="orchestrator",
-        api_key="not-needed",
-        session_db_path=tmp_path / "sessions.sqlite",
-    )
-    captured = []
-
-    class CapturePostHook:
-        event_name = "PostToolUse"
-
-        def run(self, payload):
-            captured.append(payload)
-            return HookResult()
-
-    runtime.hook_runner = HookRunner(handlers=[CapturePostHook()])
-    tool = next(tool for tool in runtime._build_tools() if tool.name == "get_current_time")
-    context = OrchestratorContext(
-        session_id="abc",
-        backend=runtime.backend,
         model_profiles=runtime.model_profiles,
     )
 
@@ -278,14 +186,11 @@ def test_post_tool_hook_receives_output_payload(tmp_path):
         )
     )
 
-    assert captured[0]["tool_name"] == "get_current_time"
-    assert captured[0]["status"] == "completed"
-    assert captured[0]["output"]["timezone"] == runtime.timezone_name
+    assert context.events[-1]["payload"]["status"] == "completed"
 
 
 def test_runtime_clear_memory_clears_persisted_memory(tmp_path):
     runtime = AgentRuntime(
-        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -317,7 +222,6 @@ def test_skill_agent_tool_invocation_creates_isolated_worker_contexts(tmp_path, 
     )
     backend = CsvSQLiteBackend({"resources": csv_path})
     runtime = AgentRuntime(
-        backend=backend,
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -330,7 +234,7 @@ def test_skill_agent_tool_invocation_creates_isolated_worker_contexts(tmp_path, 
     class FakeRunResult:
         final_output = {
             "answer": "ok",
-            "skill": "text2sql",
+            "subagent": "text2sql",
             "domain": "idc_resources",
             "sql": "SELECT 1",
             "rows": [],
@@ -344,14 +248,15 @@ def test_skill_agent_tool_invocation_creates_isolated_worker_contexts(tmp_path, 
         captured["sessions"].append(kwargs["session"])
         return FakeRunResult()
 
-    monkeypatch.setattr("agent_runtime.core.skill_runner.Runner.run", fake_runner_run)
+    monkeypatch.setattr("agent_runtime.worker.subagent_runner.Runner.run", fake_runner_run)
 
     tool = next(tool for tool in runtime._build_tools() if tool.name == "text2sql")
-    orchestrator_context = OrchestratorContext(
+    orchestrator_context = RuntimeContext(
+        run_id="abc",
         session_id="abc",
-        backend=backend,
         model_profiles=runtime.model_profiles,
         result_store=runtime.result_store,
+        state={"database_backend": backend},
     )
 
     first_output = asyncio.run(
@@ -381,16 +286,16 @@ def test_skill_agent_tool_invocation_creates_isolated_worker_contexts(tmp_path, 
         "answer": "ok",
         "error": "",
         "subagent": "text2sql",
-        "domain": "idc_resources",
-        "sql": "SELECT 1",
-        "result_id": "",
-        "row_count": 0,
-        "truncated": False,
-        "sample_rows": [],
+        "artifacts": [],
+        "extras": {
+            "domain": "idc_resources",
+            "sql": "SELECT 1",
+            "rows": [],
+        },
     }
     assert json.loads(second_output)["answer"] == "ok"
     assert captured["inputs"] == ["first task", "second task"]
-    assert all(isinstance(ctx, RunContext) for ctx in captured["contexts"])
+    assert all(isinstance(ctx, RuntimeContext) for ctx in captured["contexts"])
     assert captured["contexts"][0] is not captured["contexts"][1]
     assert captured["contexts"][0].run_id != captured["contexts"][1].run_id
     assert captured["sessions"][0] is not captured["sessions"][1]
@@ -398,7 +303,6 @@ def test_skill_agent_tool_invocation_creates_isolated_worker_contexts(tmp_path, 
 
 def test_load_skill_returns_skill_body(tmp_path):
     runtime = AgentRuntime(
-        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -407,9 +311,9 @@ def test_load_skill_returns_skill_body(tmp_path):
         sql_model_name="sql",
     )
     tool = next(tool for tool in runtime._build_tools() if tool.name == "load_skill")
-    orchestrator_context = OrchestratorContext(
+    orchestrator_context = RuntimeContext(
+        run_id="abc",
         session_id="abc",
-        backend=runtime.backend,
         model_profiles=runtime.model_profiles,
         result_store=runtime.result_store,
     )
@@ -458,7 +362,6 @@ def test_prompt_keeps_delegation_compact():
 
 def test_memory_injection(tmp_path):
     runtime = AgentRuntime(
-        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -485,7 +388,6 @@ def test_memory_injection(tmp_path):
 
 def test_todo_context_injected_into_instructions(tmp_path):
     runtime = AgentRuntime(
-        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -493,7 +395,7 @@ def test_todo_context_injected_into_instructions(tmp_path):
         sql_base_url="http://example.test/sql/v1",
         sql_model_name="sql",
     )
-    runtime.memory_manager.update_todo(
+    runtime.todo_state.update(
         "abc",
         [
             TodoItem("执行 Text2SQL 查询", "in_progress")
@@ -508,7 +410,6 @@ def test_todo_context_injected_into_instructions(tmp_path):
 
 def test_skills_section_includes_execution_mode():
     runtime = AgentRuntime(
-        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -540,7 +441,8 @@ def test_runtime_scopes_tools_prompt_and_load_skill_by_bot(tmp_path):
             f"name: {name}\n"
             f"description: {name}\n"
             "execution:\n"
-            "  mode: worker\n",
+            "  mode: worker\n"
+            "  model_role: orchestrator\n",
             encoding="utf-8",
         )
         (subagent_dir / "prompt.md").write_text(f"{name} prompt", encoding="utf-8")
@@ -557,7 +459,6 @@ def test_runtime_scopes_tools_prompt_and_load_skill_by_bot(tmp_path):
         encoding="utf-8",
     )
     runtime = AgentRuntime(
-        backend=CsvSQLiteBackend({"data": tmp_path / "data.csv"}),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -578,9 +479,9 @@ def test_runtime_scopes_tools_prompt_and_load_skill_by_bot(tmp_path):
     assert "只做数据分析。" in instructions
 
     load_skill = next(tool for tool in runtime._build_tools(bot=bot) if tool.name == "load_skill")
-    context = OrchestratorContext(
+    context = RuntimeContext(
+        run_id="abc",
         session_id="abc",
-        backend=runtime.backend,
         model_profiles=runtime.model_profiles,
     )
     output = asyncio.run(
@@ -602,7 +503,6 @@ def test_runtime_scopes_tools_prompt_and_load_skill_by_bot(tmp_path):
 
 def test_runtime_ask_without_model_delta_uses_non_streaming_runner(tmp_path, monkeypatch):
     runtime = AgentRuntime(
-        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -623,8 +523,8 @@ def test_runtime_ask_without_model_delta_uses_non_streaming_runner(tmp_path, mon
         calls["run_streamed"] += 1
         raise AssertionError("run_streamed should not be used")
 
-    monkeypatch.setattr("agent_runtime.core.orchestrator.Runner.run", fake_run)
-    monkeypatch.setattr("agent_runtime.core.orchestrator.Runner.run_streamed", fake_run_streamed)
+    monkeypatch.setattr("agent_runtime.core.run_executor.Runner.run", fake_run)
+    monkeypatch.setattr("agent_runtime.core.run_executor.Runner.run_streamed", fake_run_streamed)
 
     result = asyncio.run(runtime.ask("hello", "session-plain"))
 
@@ -634,7 +534,6 @@ def test_runtime_ask_without_model_delta_uses_non_streaming_runner(tmp_path, mon
 
 def test_runtime_ask_streams_only_output_text_delta(tmp_path, monkeypatch):
     runtime = AgentRuntime(
-        backend=_text2sql_test_backend(),
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
@@ -672,8 +571,8 @@ def test_runtime_ask_streams_only_output_text_delta(tmp_path, monkeypatch):
     def fake_run_streamed(*args, **kwargs):
         return FakeStreamedResult()
 
-    monkeypatch.setattr("agent_runtime.core.orchestrator.Runner.run", fake_run)
-    monkeypatch.setattr("agent_runtime.core.orchestrator.Runner.run_streamed", fake_run_streamed)
+    monkeypatch.setattr("agent_runtime.core.run_executor.Runner.run", fake_run)
+    monkeypatch.setattr("agent_runtime.core.run_executor.Runner.run_streamed", fake_run_streamed)
 
     result = asyncio.run(
         runtime.ask(

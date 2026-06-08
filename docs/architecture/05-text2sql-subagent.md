@@ -11,7 +11,7 @@ Text2SQL 是一个普通 worker subagent。它继承主框架的运行能力：�
 ```mermaid
 sequenceDiagram
     Orchestrator->>SubagentRunner: text2sql(task)
-    SubagentRunner->>Worker: prompt.md + tools.py + RunContext
+    SubagentRunner->>Worker: prompt.md + extension tools + RunContext
     Worker->>Worker: 选择 domain
     Worker->>DB: get_domain_schema(domain_name)
     Worker->>DB: search_domain_values(domain_name, query)
@@ -23,13 +23,14 @@ sequenceDiagram
 
 ## 配置
 
-`AGENT.yaml` 只声明 subagent 元数据和约定式工具：
+`AGENT.yaml` 只声明 subagent 元数据和 extension 入口：
 
 ```yaml
 name: text2sql
 description: 使用自然语言查询结构化数据，生成并执行只读 SQL。
 execution:
   mode: worker
+  model_role: orchestrator
 extension:
   module: subagents.text2sql.extension
 domains:

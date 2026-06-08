@@ -6,11 +6,12 @@ output.
 
 ## Package Boundaries
 
-- `agent_runtime.core`: orchestration, subagent runner, run context, prompts,
-  model profiles, context compression, runtime settings, events, hook handlers,
-  preset question generation, result event extraction, and tool protocols.
-- `agent_runtime.memory`: durable memory, embeddings, session summaries, todo
-  state, and token counting.
+- `agent_runtime.core`: runtime facade, agent factory, tool factory, session
+  manager, run executor, result mapper, subagent runner, run context, prompts,
+  model profiles, context compression, events, `SessionStart` hook primitives,
+  result artifact extraction, and tool protocols.
+- `agent_runtime.memory`: durable memory, embeddings, session summaries,
+  session-local todo state, and token counting.
 - `agent_runtime.storage`: database backends, diagnostic persistence, and
   result storage.
 - `agent_runtime.registry`: manifest-driven discovery for skills, subagents,
@@ -29,7 +30,7 @@ from agent_runtime import AgentRuntime
 Internal code should use the layered paths directly, for example:
 
 ```python
-from agent_runtime.core.orchestrator import AgentRuntime
+from agent_runtime.core.runtime import AgentRuntime
 from agent_runtime.core.context import RunContext
 from agent_runtime.core.subagent_runner import SubagentRunner
 from agent_runtime.storage.database import CsvSQLiteBackend
@@ -37,9 +38,8 @@ from agent_runtime.memory.memory_manager import MemoryManager
 from agent_runtime.registry.skill_registry import AgentRegistry
 ```
 
-The old top-level shim modules such as `agent_runtime.orchestrator`,
-`agent_runtime.skill_runner`, and `agent_runtime.database` are intentionally
-removed.
+The old `agent_runtime.core.skill_runner` and `agent_runtime.core.settings`
+compatibility modules are removed.
 
 ## Runtime Events
 
@@ -88,13 +88,13 @@ tools, skill loading, and welcome content to that Bot. Welcome/preset questions
 are optional Bot config, not subagent config.
 
 Subagents are convention-based capability packages. The runtime reads
-`AGENT.yaml` for metadata, `prompt.md` for the worker prompt, loads
-`subagents.<name>.tools` by default, and optionally reads
-`subagents.<name>.context`. `ENVIRONMENT.md` documents how to start or connect
-that subagent's local/production environment and is not injected into model
-context. `runtime_env` and `data` metadata are passed through to the subagent
-implementation; the core runtime does not interpret SQL schemas, PDF files,
-vector stores, or other domain-specific resources.
+`AGENT.yaml` for metadata, `prompt.md` for the worker prompt, and loads
+`extension.py register(api)` as the only supported entrypoint for tools,
+environment checks, and prompt context. `ENVIRONMENT.md` documents how to start
+or connect that subagent's local/production environment and is not injected
+into model context. Subagent metadata is passed through to the implementation;
+the core runtime does not interpret SQL schemas, PDF files, vector stores, or
+other domain-specific resources.
 
 ## Session Export
 

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from agents.tool_context import ToolContext
 
-from agent_runtime.core.context import RunContext
+from agent_runtime.core.context import RuntimeContext
 from agent_runtime.registry.skill_registry import AgentRegistry
 from subagents.rag import extension as rag_tools
 from subagents.rag.core.markdown_loader import KnowledgeDocument
@@ -41,7 +41,7 @@ def test_rag_manifest_declares_local_markdown_data():
     assert manifest.body.startswith("你是 RAG Knowledge Subagent")
     assert manifest.extension.module == "subagents.rag.extension"
     assert manifest.tools == []
-    assert manifest.model.llm_role == "executor"
+    assert manifest.execution.model_role == "orchestrator"
     assert manifest.model.embedding_role == "embedding"
 
 
@@ -194,11 +194,14 @@ def test_rag_summary_failure_is_not_silently_fallbacked():
         )
 
 
-def test_rag_summary_extra_body_disables_qwen_thinking():
-    assert prepare_index._summary_extra_body("qwen3-32b") == {
+def test_rag_summary_extra_body_uses_profile_config():
+    profile = SimpleNamespace(
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}}
+    )
+
+    assert prepare_index._summary_extra_body(profile) == {
         "chat_template_kwargs": {"enable_thinking": False}
     }
-    assert prepare_index._summary_extra_body("plain-chat") == {}
 
 
 def test_rag_summary_output_strips_thinking_blocks():
@@ -239,11 +242,10 @@ def test_rag_retrieval_has_no_agent_runtime_dependency():
 def test_rag_tool_returns_clear_error_when_index_not_prepared(tmp_path, monkeypatch):
     monkeypatch.delenv("RAG_INDEX_PATH", raising=False)
     registry = AgentRegistry(subagents_root=Path("subagents"))
-    run_ctx = RunContext(
+    run_ctx = RuntimeContext(
         run_id="rag-run",
         runtime_root=tmp_path,
         active_subagent="rag",
-        backend=None,
         model_profiles={},
         agent_registry=registry,
     )
@@ -294,14 +296,13 @@ def test_rag_tool_searches_prepared_index(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("RAG_INDEX_PATH", str(index_path))
     monkeypatch.setattr(
-        "subagents.rag.extension.EmbeddingClient",
-        lambda profile: FakeEmbeddingClient(),
+        "agent_runtime.subagent_api.SubagentContext.embedding_client",
+        lambda self: FakeEmbeddingClient(),
     )
-    run_ctx = RunContext(
+    run_ctx = RuntimeContext(
         run_id="rag-index-run",
         runtime_root=tmp_path,
         active_subagent="rag",
-        backend=None,
         model_profiles={},
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
     )
@@ -352,11 +353,10 @@ def test_rag_summary_tool_returns_prepared_index_summary(tmp_path, monkeypatch):
         index_path,
     )
     monkeypatch.setenv("RAG_INDEX_PATH", str(index_path))
-    run_ctx = RunContext(
+    run_ctx = RuntimeContext(
         run_id="rag-summary-run",
         runtime_root=tmp_path,
         active_subagent="rag",
-        backend=None,
         model_profiles={},
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
     )
@@ -416,14 +416,13 @@ def test_rag_toolkit_emits_successful_search(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("RAG_INDEX_PATH", str(index_path))
     monkeypatch.setattr(
-        "subagents.rag.extension.EmbeddingClient",
-        lambda profile: FakeEmbeddingClient(),
+        "agent_runtime.subagent_api.SubagentContext.embedding_client",
+        lambda self: FakeEmbeddingClient(),
     )
-    run_ctx = RunContext(
+    run_ctx = RuntimeContext(
         run_id="rag-success-run",
         runtime_root=Path("."),
         active_subagent="rag",
-        backend=None,
         model_profiles={},
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
     )

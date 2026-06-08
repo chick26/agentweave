@@ -23,7 +23,7 @@ sequenceDiagram
     activate AgentTool
     AgentTool->>Runner: 通过隔离执行桥启动 worker
     activate Runner
-    Note over Runner: 初始化独立的 RunContext<br/>与内存 SQLite 运行时 Session
+    Note over Runner: 初始化子 RuntimeContext<br/>与内存 SQLite 运行时 Session
     Runner->>Worker: 启动 Worker 实例
     activate Worker
 
@@ -35,7 +35,7 @@ sequenceDiagram
     DB-->>Worker: 返回原始数据结果
     Worker->>Store: 将上限内结果写入本地 SQLite (.agentweave/agent_results.sqlite)
     Store-->>Worker: 返回对应的唯一 result_id
-    Worker-->>Runner: 返回规范 JSON (含 answer, result_id, sample_rows)
+    Worker-->>Runner: 返回规范 JSON (含 answer, artifacts)
     deactivate Worker
     Runner-->>AgentTool: 返回执行输出
     deactivate Runner
@@ -59,14 +59,14 @@ sequenceDiagram
    * **调用同名 subagent tool**：Orchestrator 自动生成一份自包含的 `task` 参数，只传用户原文和已确认事实；字段选择、枚举映射和值链接由 Worker 内部完成。
 
 3. **沙箱隔离执行阶段（Subagent Execution）**：
-   * SDK agent tool 进入执行桥后，`SubagentRunner` 在隔离内存的 `SQLiteSession` 与 `RunContext` 下动态实例化一个 Worker Subagent。
+   * SDK agent tool 进入执行桥后，`SubagentRunner` 在隔离内存的 `SQLiteSession` 与子 `RuntimeContext` 下动态实例化一个 Worker Subagent。
    * Worker 根据 `prompt.md` 设定的专家行为规范，只调用自己声明的局部 tools。Text2SQL 的 Domain 选择、Schema 装载、值链接和 SQL 生成在 Text2SQL 包内完成；RAG 的 Markdown 分段、索引初始化和检索也在 RAG 包内完成。
    * **值链接**：对于用户输入中拼写不精确的实体，`search_domain_values` 会查询数据库真实值候选，帮助 SQL 模型生成更 grounded 的 SQL。
    * **异常重试**：如 SQL 执行报错，Worker 会结合报错信息重新生成并执行最多一次。
 
 4. **结果持久化与展现阶段（Result Persistence & UI）**：
    * 数据库只读执行后，`execute_sql` 将上限内的查询结果写入本地 `.agentweave/agent_results.sqlite` 的 Result Store。
-   * Worker 只携带极简的 `result_id`、`stored_row_count`、`has_more` 以及前几行的样例数据 `sample_rows` 返回给 Orchestrator，防止主模型上下文溢出。
+   * Worker 通过 `artifacts[type="sql_result"]` 暴露 `result_id`、`stored_row_count`、`has_more` 以及样例数据，防止主模型上下文溢出。
    * Orchestrator 提取关键结论，以简洁的中文呈现给用户；前端 Streamlit 接收 `result_id`，在 "Results" 页签下进行分页数据展示及提供 CSV 导出下载。
 
 ## 运行时机制与扩展
@@ -76,7 +76,7 @@ sequenceDiagram
 *   **Worker 模式 (Subagent Mode)**:
     *   **配置值**: `mode: worker`
     *   **行为**: subagent 运行在完全独立的沙箱容器（`SQLiteSession`）中，作为一个自治的 Worker Agent 运行多步推理逻辑。主编排器（Orchestrator）通过 SDK agent-as-tool 风格的同名工具进行委派，Worker 内部调用自己局部的 Tools 完成工作后返回统一格式的 JSON 结果。
-    *   **接入方式**: 通过 `extension.module` 加载 subagent 自己的 `extension.py register(api)`；扩展自行注册工具、环境检查和 prompt context。`tools.py` 只作为显式声明的自定义补充工具入口。
+    *   **接入方式**: 通过 `extension.module` 加载 subagent 自己的 `extension.py register(api)`；扩展自行注册工具、环境检查和 prompt context。`AGENT.yaml tools` legacy 入口已删除。
     *   **适用场景**: 需要大模型进行复杂的垂直推理、多步骤操作、容错纠错的场景（如 SQL 纠错、网页深度爬取等）。
 
 ### 2. Skill 方法卡（Skills）
@@ -93,12 +93,11 @@ sequenceDiagram
 *   **会话续航记忆 (Session Continuity)**:
     *   `session:<session_id>` 命名空间：会话轮次过多触发上下文压缩（Soft Summary）时，`ContextCompressor` 提炼的阶段性工作成果将保存在此，用于后续会话续航。
 *   **短期会话工作记忆 (Todo List)**:
-    *   通过 `update_todo` 工具动态更新，仅在当前会话生命周期内有效（不持久化）。编排器用其来做多步骤规划与自我进度追踪。
+    *   由 `TodoState` 管理，仅在当前会话生命周期内有效（不持久化），不再混入长期 `MemoryManager`。
 
 ### 4. 钩子机制（Hooks）
 框架支持事件驱动的钩子扩展（`HookRunner`）。`agent_runtime/core/hooks.py` 只保留“事件名 -> 一组处理函数”的核心机制，项目自定义 hook 实现放在 `agent_runtime/hooks/`。当前支持：
-*   **`SessionStart`**：新会话启动时由 `agent_runtime/hooks/session_start.py` 返回欢迎消息。Bot 可配置 `welcome.preset: true`，用 `welcome.prompt` 加已挂载 subagents/skills 的 description 生成欢迎词；未开启时直接展示欢迎文案和能力描述。
-*   **`PreToolUse` / `PostToolUse`**：每次工具或 subagent tool 调用前后触发，可用于只读校验、审计、阻止调用或向模型返回 hook 注入信息。
+*   **`SessionStart`**：新会话启动时由 `agent_runtime/hooks/session_start.py` 返回 startup payload，包括欢迎文案、preset questions、能力摘要、memory hint 和建议下一步。
 
 ## 已接入的能力
 
@@ -121,16 +120,19 @@ agentweave/
 ├── agent_runtime/
 │   ├── common.py                  # 通用 helper：时间、XML、frontmatter、identifier 等
 │   ├── core/
-│   │   ├── orchestrator.py        # 主 Orchestrator runtime
+│   │   ├── runtime.py             # AgentRuntime 对外门面
+│   │   ├── agent_factory.py       # 构建 Orchestrator Agent
+│   │   ├── tool_factory.py        # 构建 runtime tools
+│   │   ├── session_manager.py     # SQLiteSession 与上下文压缩
+│   │   ├── run_executor.py        # SDK Runner 执行
+│   │   ├── result_mapper.py       # SDK result/events 到 API payload
 │   │   ├── subagent_runner.py     # SubagentRunner worker 生命周期
-│   │   ├── skill_runner.py        # 兼容旧导入的 shim
-│   │   ├── context.py             # BaseContext / OrchestratorContext / RunContext
+│   │   ├── context.py             # RuntimeContext
 │   │   ├── events.py              # RuntimeEvent / EventBus
 │   │   ├── hooks.py               # HookResult/HookRunner 等核心 hook 机制
 │   │   ├── result_events.py       # 从事件流提取 ResultStore metadata
 │   │   ├── compressor.py          # 上下文压缩与 hard trim
 │   │   ├── model_profiles.py      # 模型角色配置
-│   │   ├── settings.py            # 环境变量配置读取
 │   │   └── runtime_utils.py       # 模型日志、SQL 提取、时间工具
 │   ├── hooks/                     # AgentWeave 自定义 hook 实现
 │   │   └── session_start.py       # SessionStart welcome hook
@@ -176,10 +178,10 @@ agentweave/
 新增通用 subagent：
 
 1. 在 `subagents/` 下创建新目录，例如 `subagents/my_agent/`。
-2. 创建 `AGENT.yaml`，声明 `name`、`description`、`execution`、`extension`、`memory`、可选 `tools` 和 `routing_hints`。
+2. 创建 `AGENT.yaml`，声明 `name`、`description`、`execution.mode: worker`、`execution.model_role`、`extension`、`memory` 和 `routing_hints`。内置 worker 默认使用 `orchestrator` 做流程编排；本地可用 `SUBAGENT_<NAME>_MODEL_ROLE` 覆盖。
 3. 创建 `prompt.md`，作为 worker prompt 模板。
 4. 在 subagent 目录中实现 `extension.py`，暴露 `register(api)`；通过 `api.tool(...)`、`api.validate_environment(...)`、`api.prompt_context(...)` 注册能力。
-5. 如果需要自定义补充工具，可新增 `tools.py` 并在 `AGENT.yaml.tools` 中显式声明工具名。
+5. 新 subagent 必须统一在 `extension.py register(api)` 中注册工具；`AGENT.yaml tools` legacy 入口已删除。
 6. 如果需要本地准备流程，提供 `ENVIRONMENT.md`、`data/`、`core/` 和 `prepare/`。框架只执行 extension 注册协议，不理解 SQL、Markdown、向量库等业务细节。
 7. 可通过环境变量关闭某个 subagent 的 tools，例如 `SUBAGENT_TEXT2SQL_ENABLED=0`。
 
@@ -192,7 +194,6 @@ subagents/<name>/
 ├── AGENT.yaml
 ├── prompt.md
 ├── extension.py      # 必需，register(api)
-├── tools.py          # 可选，自定义补充工具
 ├── ENVIRONMENT.md    # 可选，环境准备说明
 ├── data/             # 可选，本 subagent 私有测试数据
 ├── core/             # 可选，业务纯逻辑
@@ -211,11 +212,31 @@ execution:
   timeout_seconds: 60
 extension:
   module: subagents.my_agent.extension
-tools:
-  - first_tool
 routing_hints:
   - 何时路由到这个 subagent
 ```
+
+### AGENT.yaml 字段说明
+
+| 字段 | 必填 | 含义 |
+|------|------|------|
+| `name` | 是 | subagent 的唯一名称，也是 Orchestrator 看到的同名委派工具名。建议使用小写 snake_case。 |
+| `description` | 是 | 面向 Orchestrator 的能力描述，用于能力列表、路由判断和欢迎能力摘要。 |
+| `execution.mode` | 是 | 执行模式。subagent 当前应使用 `worker`，表示作为独立 SDK Agent 运行。 |
+| `execution.model_role` | 是 | worker 编排模型角色。内置 subagent 默认用 `orchestrator`，即 qwen3.6；本地可用 `SUBAGENT_<NAME>_MODEL_ROLE` 覆盖。非编排类 LLM 调用应在 extension 内显式使用 `executor`。 |
+| `execution.max_turns` | 否 | worker 单次运行最多 SDK turn 数；不填则使用 `WORKER_MAX_TURNS` 默认值。 |
+| `execution.timeout_seconds` | 否 | worker 单次运行超时时间；不填则使用 `WORKER_TIMEOUT_SECONDS` 默认值。 |
+| `extension.module` | 推荐 | Python 模块路径，运行时会加载其中的 `register(api)`，用于注册工具、环境检查和 prompt context。新 subagent 应使用这个入口。 |
+| `model.embedding_role` | 否 | embedding 模型角色，主要给 RAG 建索引或检索使用，例如 `embedding`。 |
+| `model.embedding` / `model.embedding_base_url` | 否 | 针对该 subagent 覆盖 embedding 模型名或 base URL。 |
+| `model.llm` / `model.llm_base_url` | 否 | 针对 worker 编排模型的局部覆盖。通常不建议内置业务 subagent 使用，优先用 `execution.model_role` 和模型角色配置。 |
+| `model.extra_body` | 否 | 针对该 subagent 的 OpenAI-compatible `extra_body` 覆盖，会合并到角色级 extra body 配置上。 |
+| `memory.namespaces` | 否 | worker prompt 可读取的长期记忆命名空间，例如 `project`、`skill:text2sql`、`subagent:rag`。 |
+| `domains.file` | 否 | subagent 私有 domain catalog 文件名，Text2SQL 用它加载数据域元信息。core 只透传，不理解具体业务 schema。 |
+| `routing_hints` | 推荐 | 给 Orchestrator 的路由提示词。用户问题命中这些意图时，更容易委派到该 subagent。 |
+| `suggested_questions` | 否 | subagent 自己声明的欢迎页预设问题。 |
+
+注意：`model.llm_role` 已废弃，不能再使用；worker LLM 角色统一写在 `execution.model_role`。
 
 ## 新增 Skill
 
@@ -323,7 +344,7 @@ TEXT2SQL_DATABASE_URL=sqlite:////absolute/path/to/.agentweave/text2sql.sqlite
 
 ## 查询结果存储
 
-`execute_sql()` 不再把完整查询结果塞进 worker 上下文，而是写入本地 SQLite `.agentweave/agent_results.sqlite`。Worker 只看到：
+`execute_sql()` 不再把完整查询结果塞进 worker 上下文，而是写入本地 SQLite `.agentweave/agent_results.sqlite`。Worker 通过 `artifacts[type="sql_result"]` 看到：
 
 - `result_id`
 - `row_count` / `stored_row_count`
@@ -369,9 +390,9 @@ sqlite3 .agentweave/streamlit_sessions.sqlite \
 
 | 角色 | 环境变量 | 默认值 |
 |------|----------|--------|
-| Orchestrator | `QWEN36_BASE_URL` / `QWEN36_MODEL` | `http://localhost:8000/v1` / `qwen3.6-27b` |
-| Orchestrator context window | `QWEN36_CONTEXT_WINDOW` | `32768` |
-| Worker subagent 编排 | `SUBAGENT_<NAME>_MODEL_ROLE` | 默认 `orchestrator` |
+| Orchestrator | `ORCHESTRATOR_BASE_URL` / `ORCHESTRATOR_MODEL` | `http://localhost:8000/v1` / `qwen3.6-27b` |
+| Orchestrator context window | `ORCHESTRATOR_CONTEXT_WINDOW` | `32768` |
+| Worker 编排角色覆盖 | `SUBAGENT_<NAME>_MODEL_ROLE` | 默认使用 manifest 中的 `execution.model_role` |
 | 执行类模型 | `EXECUTOR_BASE_URL` / `EXECUTOR_MODEL` | `http://localhost:8001/v1` / `qwen3-32b` |
 | Executor context window | `EXECUTOR_CONTEXT_WINDOW` | `32768` |
 | Memory embedding | `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` | `http://localhost:8002/v1` / `openai-compatible-embedding-model` |
@@ -386,7 +407,10 @@ OPENAI_CLIENT_TIMEOUT=60
 OPENAI_CLIENT_MAX_RETRIES=2
 MEMORY_ENABLED=1
 MEMORY_EMBEDDING_ENABLED=1
-TEXT2SQL_TIMEZONE=Asia/Hong_Kong
+AGENTWEAVE_ENABLE_TODO_TOOL=0
+AGENTWEAVE_TIMEZONE=Asia/Hong_Kong
+ORCHESTRATOR_EXTRA_BODY_JSON={"chat_template_kwargs":{"enable_thinking":false}}
+EXECUTOR_EXTRA_BODY_JSON={"chat_template_kwargs":{"enable_thinking":false}}
 ```
 
 这些变量写入 `.env` 或 `.agentweave/runtime.env` 即可；启动时会自动加载。

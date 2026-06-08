@@ -1,7 +1,7 @@
 [project]
-name = "text2sql-agent"
+name = "agentweave"
 version = "0.2.0"
-description = "Subagent-driven data query agent with loadable skills."
+description = "Composable OpenAI Agents SDK runtime for conversational bots with worker subagents and skills."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

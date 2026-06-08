@@ -14,7 +14,6 @@ from agent_runtime.common import file_signature, split_frontmatter, xml_escape
 @dataclass(frozen=True)
 class ManifestExecution:
     mode: str = "inline"
-    worker_profile: str = ""
     model_role: str = ""
     max_turns: int | None = None
     timeout_seconds: float | None = None
@@ -33,17 +32,23 @@ class ManifestDomains:
 
 @dataclass(frozen=True)
 class ManifestModel:
-    llm_role: str = ""
     llm: str = ""
     llm_base_url: str = ""
     embedding_role: str = ""
     embedding: str = ""
     embedding_base_url: str = ""
+    extra_body: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class ManifestExtension:
     module: str = ""
+
+
+@dataclass(frozen=True)
+class SuggestedQuestion:
+    text: str
+    reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -60,6 +65,7 @@ class ManifestBase:
     model: ManifestModel = field(default_factory=ManifestModel)
     extension: ManifestExtension = field(default_factory=ManifestExtension)
     routing_hints: list[str] = field(default_factory=list)
+    suggested_questions: list[SuggestedQuestion] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -279,8 +285,6 @@ def _build_manifest_from_metadata(
     extension = metadata.get("extension") if isinstance(metadata.get("extension"), dict) else {}
     execution_mode = str(execution.get("mode", "inline"))
     model_role = str(execution.get("model_role") or "")
-    if kind == "subagent" and execution_mode == "worker" and not model_role:
-        model_role = "orchestrator"
     return manifest_cls(
         name=str(metadata.get("name") or default_name),
         description=str(metadata.get("description", "")),
@@ -289,7 +293,6 @@ def _build_manifest_from_metadata(
         body=body,
         execution=ManifestExecution(
             mode=execution_mode,
-            worker_profile=str(execution.get("worker_profile", "")),
             model_role=model_role,
             max_turns=_optional_int(execution.get("max_turns")),
             timeout_seconds=_optional_float(execution.get("timeout_seconds")),
@@ -301,17 +304,20 @@ def _build_manifest_from_metadata(
             file=str(domains.get("file", "")),
         ),
         model=ManifestModel(
-            llm_role=str(model.get("llm_role", "")),
             llm=str(model.get("llm", "")),
             llm_base_url=str(model.get("llm_base_url", "")),
             embedding_role=str(model.get("embedding_role", "")),
             embedding=str(model.get("embedding", "")),
             embedding_base_url=str(model.get("embedding_base_url", "")),
+            extra_body=_as_dict(model.get("extra_body", {})),
         ),
         extension=ManifestExtension(
             module=str(extension.get("module", "")),
         ),
         routing_hints=_as_str_list(metadata.get("routing_hints", [])),
+        suggested_questions=_as_suggested_questions(
+            metadata.get("suggested_questions", metadata.get("presets", []))
+        ),
         metadata=metadata,
     )
 
@@ -334,6 +340,34 @@ def _as_str_list(value: Any) -> list[str]:
     return []
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _as_suggested_questions(value: Any) -> list[SuggestedQuestion]:
+    if not isinstance(value, list):
+        return []
+    questions: list[SuggestedQuestion] = []
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                questions.append(SuggestedQuestion(text=text))
+            continue
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        questions.append(
+            SuggestedQuestion(
+                text=text,
+                reason=str(item.get("reason") or "").strip(),
+            )
+        )
+    return questions
+
+
 def _validate_subagent_contract(manifest: ManifestBase) -> None:
     root = manifest.location.parent
     if manifest.location.name != "AGENT.yaml":
@@ -342,15 +376,28 @@ def _validate_subagent_contract(manifest: ManifestBase) -> None:
         raise ValueError(f"Subagent `{manifest.name}` must provide prompt.md.")
     if manifest.execution.mode != "worker":
         raise ValueError(f"Subagent `{manifest.name}` must set execution.mode: worker.")
+    if not manifest.execution.model_role:
+        raise ValueError(
+            f"Subagent `{manifest.name}` must set execution.model_role for worker execution."
+        )
     execution = manifest.metadata.get("execution")
     execution = execution if isinstance(execution, dict) else {}
-    if "tool_module" in execution or "context_module" in execution:
+    if "tool_module" in execution or "context_module" in execution or "worker_profile" in execution:
         raise ValueError(
             f"Subagent `{manifest.name}` must use convention paths; "
-            "execution.tool_module/context_module are not allowed."
+            "execution.tool_module/context_module/worker_profile are not allowed."
         )
-    if manifest.tools and not (root / "tools.py").exists():
-        raise ValueError(f"Subagent `{manifest.name}` declares tools but tools.py is missing.")
+    if manifest.tools:
+        raise ValueError(
+            f"Subagent `{manifest.name}` declares legacy tools. "
+            "Use extension.py register(api) instead of AGENT.yaml tools."
+        )
+    model = manifest.metadata.get("model")
+    model = model if isinstance(model, dict) else {}
+    if "llm_role" in model:
+        raise ValueError(
+            f"Subagent `{manifest.name}` must use execution.model_role instead of model.llm_role."
+        )
 
 
 def _optional_int(value: Any) -> int | None:
@@ -413,7 +460,6 @@ def _subagent_signature_paths(root: Path) -> list[Path]:
         for filename in [
             "AGENT.yaml",
             "prompt.md",
-            "tools.py",
             "extension.py",
             "ENVIRONMENT.md",
             "domain_catalog.yaml",

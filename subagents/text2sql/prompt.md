@@ -28,8 +28,8 @@
 - 如果查询依赖业务口径或模糊值匹配，answer 先给直接结论，再用一句话说明本次使用的口径或匹配值。
 - 基于 execute_sql 返回的 result pointer 与 sample_rows 作答。
 - 如果 execute_sql 返回 truncated=true，说明 sample_rows 只是样例；如果 has_more=true，说明 result_id 中也只保存了上限内的行数。
-- 列表或排行结果只总结关键行；样例结果保留在 rows 字段，result_id 填写 execute_sql 返回的 result_id。
-- sql 字段填写最终执行的 SQL；domain 字段填写 plan 返回的 domain 名称。
+- 列表或排行结果只总结关键行；样例结果保留在 `artifacts[type="sql_result"]` 的 preview 字段。
+- SQL、domain、result_id、row_count 等查询元数据只放入 sql_result artifact，不要作为顶层字段返回。
 </answer_policy>
 
 # 运行时上下文
@@ -49,13 +49,22 @@
   "subagent": "text2sql",
   "trace": [],
   "error": "",
-  "extras": {
-    "domain": "激活的 domain 名称",
-    "sql": "最终执行的 SQL",
-    "result_id": "execute_sql 返回的 result_id",
-    "row_count": 0,
-    "truncated": false,
-    "rows": []
-  }
+  "artifacts": [
+    {
+      "type": "sql_result",
+      "result_id": "execute_sql 返回的 result_id",
+      "preview": [],
+      "metadata": {
+        "domain": "激活的 domain 名称",
+        "sql": "最终执行的 SQL",
+        "row_count": 0,
+        "stored_row_count": 0,
+        "truncated": false,
+        "has_more": false,
+        "columns": []
+      }
+    }
+  ],
+  "extras": {}
 }
 </output_json_schema>

@@ -7,15 +7,21 @@ from agent_runtime.hooks.session_start import (
     SessionStartContext,
     build_default_session_start_hooks,
 )
-from agent_runtime.registry.skill_registry import AgentManifest, Skill
+from agent_runtime.registry.skill_registry import AgentManifest, Skill, SuggestedQuestion
 
 
-def _subagent(name: str, description: str) -> AgentManifest:
+def _subagent(
+    name: str,
+    description: str,
+    *,
+    suggested_questions: list[SuggestedQuestion] | None = None,
+) -> AgentManifest:
     return AgentManifest(
         name=name,
         description=description,
         location=Path("subagents") / name / "AGENT.yaml",
         kind="subagent",
+        suggested_questions=suggested_questions or [],
     )
 
 
@@ -36,7 +42,11 @@ def test_session_start_hook_returns_default_welcome_without_resources():
 
     assert result.error == ""
     assert result.message == "你好，我可以回答已接入能力范围内的问题。"
-    assert result.payload == {"source": "default", "resources": []}
+    assert result.payload["source"] == "default"
+    assert result.payload["welcome_message"] == "你好，我可以回答已接入能力范围内的问题。"
+    assert result.payload["preset_questions"] == []
+    assert result.payload["capabilities"] == []
+    assert result.payload["resources"] == []
 
 
 def test_session_start_hook_renders_mounted_resource_descriptions():
@@ -46,8 +56,26 @@ def test_session_start_hook_renders_mounted_resource_descriptions():
             welcome_message="你好，当前机器人已加载以下能力。",
             memory_context="[project]\n- rule: 保留 SQL 口径",
             subagents=[
-                _subagent("text2sql", "使用自然语言查询结构化数据，生成并执行只读 SQL。"),
-                _subagent("rag", "基于 Markdown 知识库回答问题，返回带来源的检索片段。"),
+                _subagent(
+                    "text2sql",
+                    "使用自然语言查询结构化数据，生成并执行只读 SQL。",
+                    suggested_questions=[
+                        SuggestedQuestion(
+                            text="查询最近一周结构化数据中的关键指标",
+                            reason="结构化数据查询",
+                        )
+                    ],
+                ),
+                _subagent(
+                    "rag",
+                    "基于 Markdown 知识库回答问题，返回带来源的检索片段。",
+                    suggested_questions=[
+                        SuggestedQuestion(
+                            text="总结知识库中与当前问题相关的资料",
+                            reason="知识库检索",
+                        )
+                    ],
+                ),
             ],
             skills=[
                 _skill("data_analysis", "面向表格结果的数据分析方法卡。"),
@@ -63,6 +91,11 @@ def test_session_start_hook_renders_mounted_resource_descriptions():
     assert "`data_analysis`：面向表格结果的数据分析方法卡。" in result.message
     assert "项目记忆" in result.message
     assert result.payload["source"] == "descriptions"
+    assert result.payload["memory_hint"]
+    assert [item["target"] for item in result.payload["preset_questions"]] == [
+        "text2sql",
+        "rag",
+    ]
     assert [item["name"] for item in result.payload["resources"]] == [
         "text2sql",
         "rag",
@@ -92,7 +125,16 @@ def test_session_start_hook_uses_prompt_when_preset_enabled(monkeypatch):
             welcome_model_name="chat",
             welcome_model_api_key="not-needed",
             subagents=[
-                _subagent("text2sql", "使用自然语言查询结构化数据。"),
+                _subagent(
+                    "text2sql",
+                    "使用自然语言查询结构化数据。",
+                    suggested_questions=[
+                        SuggestedQuestion(
+                            text="查询最近一周结构化数据中的关键指标",
+                            reason="结构化数据查询",
+                        )
+                    ],
+                ),
             ],
         ),
     )
@@ -100,14 +142,35 @@ def test_session_start_hook_uses_prompt_when_preset_enabled(monkeypatch):
     assert result.error == ""
     assert result.message == "欢迎使用数据分析机器人。\n- 403机房有多少可用机柜？"
     assert result.payload["source"] == "preset"
+    assert result.payload["preset_questions"][0]["target"] == "text2sql"
     assert captured["prompt"] == "根据能力描述生成示例问题"
     assert captured["resources"] == [
         {
             "kind": "subagent",
             "name": "text2sql",
             "description": "使用自然语言查询结构化数据。",
+            "suggested_questions": [
+                {
+                    "text": "查询最近一周结构化数据中的关键指标",
+                    "reason": "结构化数据查询",
+                }
+            ],
         }
     ]
+
+
+def test_session_start_hook_does_not_generate_fallback_presets_for_unknown_subagent():
+    result = HookRunner(handlers=build_default_session_start_hooks()).run(
+        "SessionStart",
+        SessionStartContext(
+            subagents=[
+                _subagent("code_executor", "执行代码任务。"),
+            ],
+        ),
+    )
+
+    assert result.payload["preset_questions"] == []
+    assert result.payload["suggested_next_actions"] == []
 
 
 def test_hook_runner_returns_unsupported_event_error() -> None:
@@ -143,50 +206,34 @@ def test_hook_runner_accepts_injected_handler() -> None:
     assert result.error == ""
 
 
-def test_hook_runner_runs_multiple_handlers_until_blocking_result() -> None:
-    calls = []
-
+def test_hook_runner_aggregates_multiple_handlers() -> None:
     class FirstHook:
-        event_name = "PreToolUse"
+        event_name = "SessionStart"
 
-        def run(self, payload):
-            calls.append(("first", payload["tool_name"]))
-            return HookResult()
+        def run(self, context):
+            return HookResult(message="first", payload={"first": True})
 
-    class BlockingHook:
-        event_name = "PreToolUse"
+    class SecondHook:
+        event_name = "SessionStart"
 
-        def run(self, payload):
-            calls.append(("blocking", payload["tool_name"]))
-            return HookResult(exit_code=1, message="blocked")
+        def run(self, context):
+            return HookResult(message="second", payload={"second": True})
 
-    class NeverCalledHook:
-        event_name = "PreToolUse"
-
-        def run(self, payload):
-            calls.append(("never", payload["tool_name"]))
-            return HookResult()
-
-    result = HookRunner(
-        handlers=[FirstHook(), BlockingHook(), NeverCalledHook()]
-    ).run("PreToolUse", {"tool_name": "load_skill"})
-
-    assert result.exit_code == 1
-    assert result.message == "blocked"
-    assert calls == [("first", "load_skill"), ("blocking", "load_skill")]
-
-
-def test_hook_runner_supports_injected_pre_tool_result() -> None:
-    class InjectHook:
-        event_name = "PreToolUse"
-
-        def run(self, payload):
-            return HookResult(exit_code=2, message=f"inject:{payload['tool_name']}")
-
-    result = HookRunner(handlers={"PreToolUse": [InjectHook()]}).run(
-        "PreToolUse",
-        {"tool_name": "get_current_time"},
+    result = HookRunner(handlers=[FirstHook(), SecondHook()]).run(
+        "SessionStart",
+        SessionStartContext(),
     )
 
-    assert result.exit_code == 2
-    assert result.message == "inject:get_current_time"
+    assert result.message == "first\n\nsecond"
+    assert result.payload["first"] is True
+    assert result.payload["second"] is True
+    assert [item["message"] for item in result.payload["handler_results"]] == [
+        "first",
+        "second",
+    ]
+
+
+def test_hook_runner_no_longer_has_builtin_tool_interception_events() -> None:
+    result = HookRunner().run("PreToolUse", {"tool_name": "load_skill"})
+
+    assert result.error == "Unsupported hook event: PreToolUse"

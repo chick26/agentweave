@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,8 +17,8 @@ from agent_runtime.memory.token_counter import (
 )
 
 
-SOFT_THRESHOLD = 0.70
-HARD_THRESHOLD = 0.90
+SOFT_THRESHOLD = float(os.getenv("AGENTWEAVE_CONTEXT_SOFT_THRESHOLD", "0.70"))
+HARD_THRESHOLD = float(os.getenv("AGENTWEAVE_CONTEXT_HARD_THRESHOLD", "0.90"))
 MAX_MESSAGE_CONTENT_CHARS = 4000
 MESSAGE_PREVIEW_CHARS = 1200
 DEFAULT_SAFETY_MARGIN_TOKENS = 512
@@ -154,6 +155,9 @@ def micro_compact(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not isinstance(content, str) or len(content) <= MAX_MESSAGE_CONTENT_CHARS:
             compacted.append(dict(message))
             continue
+        if _is_structured_tool_content(message, content):
+            compacted.append(dict(message))
+            continue
         preview = content[:MESSAGE_PREVIEW_CHARS].rstrip()
         compacted.append(
             {
@@ -165,6 +169,16 @@ def micro_compact(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return compacted
+
+
+def _is_structured_tool_content(message: dict[str, Any], content: str) -> bool:
+    if message.get("role") == "tool" or message.get("tool_call_id"):
+        return True
+    stripped = content.lstrip()
+    if stripped.startswith(("{", "[")):
+        return True
+    first_line = stripped.splitlines()[0] if stripped else ""
+    return "," in first_line and len(first_line.split(",")) >= 3
 
 
 def emergency_trim(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

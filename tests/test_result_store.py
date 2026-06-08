@@ -78,22 +78,26 @@ def test_result_store_cleanup_by_max_results_and_age(tmp_path):
             raise AssertionError(f"Expected {result_id} to be cleaned")
 
 
-def test_extract_result_metadata_from_trace():
+def test_extract_result_metadata_from_subagent_artifact():
     events = [
         {
-            "kind": "subagent_trace",
+            "kind": "subagent_complete",
             "payload": {
-                "stage": "execute",
-                "input": "SELECT 1",
-                "output": {
-                    "sql": "SELECT 1",
-                    "result_id": "res_123",
-                    "row_count": 1,
-                    "columns": ["value"],
-                    "sample_rows": [{"value": 1}],
-                    "sample_size": 1,
-                    "truncated": False,
-                    "error": None,
+                "result": {
+                    "artifacts": [
+                        {
+                            "type": "sql_result",
+                            "result_id": "res_123",
+                            "preview": [{"value": 1}],
+                            "metadata": {
+                                "sql": "SELECT 1",
+                                "row_count": 1,
+                                "columns": ["value"],
+                                "sample_size": 1,
+                                "truncated": False,
+                            },
+                        }
+                    ],
                 },
             },
         }

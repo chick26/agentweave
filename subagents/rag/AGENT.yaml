@@ -2,12 +2,12 @@ name: rag
 description: 基于 Markdown 知识库回答问题，返回带来源的检索片段。
 execution:
   mode: worker
+  model_role: orchestrator
   max_turns: 6
   timeout_seconds: 90
 extension:
   module: subagents.rag.extension
 model:
-  llm_role: executor
   embedding_role: embedding
 memory:
   namespaces:
@@ -17,3 +17,6 @@ routing_hints:
   - Markdown 知识库问答
   - 文档检索、资料查询、原文依据
   - RAG、知识库、论坛资料
+suggested_questions:
+  - text: 总结知识库中与当前问题相关的资料
+    reason: 知识库检索

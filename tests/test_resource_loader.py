@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from agent_runtime.worker.subagent_runner import SubagentRunner
 from agent_runtime.registry.resources import ResourceLoader
 from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
 
@@ -50,6 +51,50 @@ def test_resource_loader_reload_invalidates_registry_cache(tmp_path, monkeypatch
 
     assert summary["skills"]["added"] == ["two"]
     assert [skill.name for skill in loader.discover().skills] == ["one", "two"]
+
+
+def test_resource_loader_reload_invalidates_extension_cache(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AGENT_PROJECT_RULES_PATH", raising=False)
+    subagent_dir = tmp_path / "subagents" / "reload_worker"
+    _write(
+        subagent_dir / "AGENT.yaml",
+        "name: reload_worker\n"
+        "description: Reload worker.\n"
+        "execution:\n"
+        "  mode: worker\n"
+        "  model_role: orchestrator\n"
+        "extension:\n"
+        "  module: subagents.reload_worker.extension\n",
+    )
+    _write(subagent_dir / "prompt.md", "Context: {value}\n")
+    _write(
+        subagent_dir / "extension.py",
+        "def context(manifest):\n"
+        "    return {'value': 'v1'}\n\n"
+        "def register(api):\n"
+        "    api.prompt_context(context)\n",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    agent_registry = AgentRegistry(subagents_root=tmp_path / "subagents")
+    loader = ResourceLoader(
+        root=tmp_path,
+        skill_registry=SkillRegistry(skills_root=tmp_path / "skills"),
+        agent_registry=agent_registry,
+    )
+    runner = SubagentRunner(registry=agent_registry, root=tmp_path)
+
+    assert runner._build_worker_prompt(agent_registry.get("reload_worker")) == "Context: v1"
+
+    _write(
+        subagent_dir / "extension.py",
+        "def context(manifest):\n"
+        "    return {'value': 'v2'}\n\n"
+        "def register(api):\n"
+        "    api.prompt_context(context)\n",
+    )
+    loader.reload()
+
+    assert runner._build_worker_prompt(agent_registry.get("reload_worker")) == "Context: v2"
 
 
 def test_resource_loader_includes_bot_changes(tmp_path, monkeypatch) -> None:

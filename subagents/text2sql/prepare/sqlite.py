@@ -8,14 +8,14 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from agent_runtime.storage.database import quote_identifier
-from agent_runtime.registry.skill_registry import AgentRegistry
+from agent_runtime.shared.database import quote_identifier
+from agent_runtime.shared.manifest import load_subagent_manifest
 from subagents.text2sql.core.domain_catalog import Text2SQLDomainCatalog
 
 
 def prepare_sqlite_database(*, root: Path, output: Path, overwrite: bool = False) -> Path:
     """Build a local SQLite database from Text2SQL domain CSV files."""
-    manifest = AgentRegistry(subagents_root=root / "subagents").get("text2sql")
+    manifest = load_subagent_manifest(root, "text2sql")
     tables = manifest_csv_tables(root=root, manifest=manifest)
     missing = [str(path) for path in tables.values() if not path.exists()]
     if missing:

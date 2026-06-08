@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from agent_runtime.core.manifest_models import (
     resolve_manifest_embedding_profile,
-    resolve_manifest_llm_profile,
+    resolve_manifest_worker_profile,
 )
 from agent_runtime.core.model_profiles import ModelProfile
 from agent_runtime.core.model_profiles import load_model_profiles
@@ -32,6 +32,33 @@ def test_model_profiles_use_env_overrides(monkeypatch):
     assert profiles["embedding"].base_url == "http://embedding/v1"
     assert profiles["embedding"].model_name == "embedding"
     assert profiles["executor"].api_key == "key"
+    assert profiles["orchestrator"].extra_body == {}
+
+
+def test_model_profiles_clamp_output_tokens_below_context_window(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_MAX_TOKENS", "262144")
+    monkeypatch.setenv("ORCHESTRATOR_CONTEXT_WINDOW", "262144")
+    monkeypatch.setenv("EXECUTOR_MAX_TOKENS", "262144")
+    monkeypatch.setenv("EXECUTOR_CONTEXT_WINDOW", "32768")
+
+    profiles = load_model_profiles(api_key="key")
+
+    assert profiles["orchestrator"].max_tokens == 32768
+    assert profiles["executor"].max_tokens == 31744
+
+
+def test_model_profiles_clamp_explicit_output_tokens(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_CONTEXT_WINDOW", "262144")
+    monkeypatch.setenv("EXECUTOR_CONTEXT_WINDOW", "262144")
+
+    profiles = load_model_profiles(
+        orchestrator_max_tokens=262144,
+        sql_max_tokens=262144,
+        api_key="key",
+    )
+
+    assert profiles["orchestrator"].max_tokens == 32768
+    assert profiles["executor"].max_tokens == 32768
 
 
 def test_embedding_profile_uses_env_overrides(monkeypatch):
@@ -91,12 +118,13 @@ def test_model_profiles_granular_api_key_fallbacks(monkeypatch):
     assert profiles_default["embedding"].api_key == "not-needed"
 
 
-def test_manifest_llm_profile_resolves_runtime_role_with_overrides():
+def test_manifest_worker_profile_resolves_execution_role_with_overrides():
     manifest = SimpleNamespace(
+        execution=SimpleNamespace(model_role="executor"),
         model=SimpleNamespace(
-            llm_role="executor",
             llm="manifest-chat",
             llm_base_url="",
+            extra_body={"temperature": 0},
         )
     )
     profiles = {
@@ -107,19 +135,45 @@ def test_manifest_llm_profile_resolves_runtime_role_with_overrides():
             api_key="exec-key",
             max_tokens=2048,
             context_window=32768,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
     }
 
-    profile = resolve_manifest_llm_profile(
+    profile = resolve_manifest_worker_profile(
         manifest,
         model_profiles=profiles,
-        default_role="orchestrator",
     )
 
     assert profile.role == "executor"
     assert profile.base_url == "http://executor/v1"
     assert profile.model_name == "manifest-chat"
     assert profile.api_key == "exec-key"
+    assert profile.extra_body == {
+        "chat_template_kwargs": {"enable_thinking": False},
+        "temperature": 0,
+    }
+
+
+def test_model_profiles_load_role_extra_body_json(monkeypatch):
+    monkeypatch.setenv(
+        "ORCHESTRATOR_EXTRA_BODY_JSON",
+        '{"chat_template_kwargs": {"enable_thinking": false}}',
+    )
+
+    profiles = load_model_profiles()
+
+    assert profiles["orchestrator"].extra_body == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
+
+
+def test_model_profiles_reject_invalid_extra_body_json(monkeypatch):
+    monkeypatch.setenv("EXECUTOR_EXTRA_BODY_JSON", "[1, 2, 3]")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="EXECUTOR_EXTRA_BODY_JSON must be a JSON object"):
+        load_model_profiles()
 
 
 def test_manifest_embedding_profile_resolves_runtime_role():

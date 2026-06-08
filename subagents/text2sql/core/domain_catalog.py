@@ -8,8 +8,8 @@ from typing import Any
 
 import yaml
 
-from agent_runtime.common import file_signature, xml_escape
-from agent_runtime.registry.skill_registry import AgentManifest
+from agent_runtime.shared.common import file_signature, xml_escape
+from agent_runtime.shared.manifest import AgentManifest
 
 
 @dataclass(frozen=True)

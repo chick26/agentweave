@@ -7,6 +7,10 @@ from dataclasses import dataclass
 import streamlit as st
 
 
+MAX_OUTPUT_TOKENS_UI_CAP = 32768
+MIN_OUTPUT_TOKENS_UI = 256
+
+
 @dataclass(frozen=True)
 class SidebarConfig:
     max_turns: int
@@ -96,9 +100,9 @@ def render_sidebar(
             model_name = st.text_input("模型名称", value=model_name_default, key="orchestration_model_name").strip() or model_name_default
             max_output_tokens = st.number_input(
                 "最大输出 tokens",
-                min_value=256,
-                max_value=262144,
-                value=max_output_tokens_default,
+                min_value=MIN_OUTPUT_TOKENS_UI,
+                max_value=MAX_OUTPUT_TOKENS_UI_CAP,
+                value=_clamp_output_tokens(max_output_tokens_default),
                 step=256,
                 key="orchestration_max_output_tokens",
             )
@@ -109,9 +113,9 @@ def render_sidebar(
             sql_model_name = st.text_input("SQL 模型名称", value=sql_model_name_default, key="sql_model_name").strip() or sql_model_name_default
             sql_max_output_tokens = st.number_input(
                 "SQL 最大输出 tokens",
-                min_value=256,
-                max_value=32768,
-                value=sql_max_output_tokens_default,
+                min_value=MIN_OUTPUT_TOKENS_UI,
+                max_value=MAX_OUTPUT_TOKENS_UI_CAP,
+                value=_clamp_output_tokens(sql_max_output_tokens_default),
                 step=256,
                 key="sql_max_output_tokens",
             )
@@ -152,6 +156,10 @@ def render_sidebar(
         embedding_model_name=embedding_model_name,
         api_key=api_key,
     )
+
+
+def _clamp_output_tokens(value: int) -> int:
+    return max(MIN_OUTPUT_TOKENS_UI, min(int(value), MAX_OUTPUT_TOKENS_UI_CAP))
 
 
 def _format_bot_option(bot_id: str, bot_options: list[dict[str, str]]) -> str:

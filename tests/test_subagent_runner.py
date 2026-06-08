@@ -5,11 +5,12 @@ import json
 from pathlib import Path
 
 import pytest
+from agents.tool_context import ToolContext
 
-from agent_runtime.core.context import OrchestratorContext, RunContext
+from agent_runtime.core.context import RuntimeContext
 from agent_runtime.core.model_profiles import ModelProfile
 from agent_runtime.core.runtime_utils import LoggingOpenAIChatCompletionsModel
-from agent_runtime.core.skill_runner import (
+from agent_runtime.worker.subagent_runner import (
     SubagentResult,
     SubagentRunner,
     WORKER_MAX_TURNS,
@@ -19,7 +20,6 @@ from agent_runtime.core.skill_runner import (
 from agent_runtime.memory.memory_manager import MemoryManager
 from agent_runtime.memory.memory_store import MemoryStore
 from agent_runtime.registry.skill_registry import AgentRegistry
-from agent_runtime.storage.database import CsvSQLiteBackend
 
 
 def _registry() -> AgentRegistry:
@@ -27,20 +27,12 @@ def _registry() -> AgentRegistry:
 
 
 def test_text2sql_worker_uses_sdk_runner_with_isolated_context(tmp_path, monkeypatch):
-    csv_path = tmp_path / "resources.csv"
-    csv_path.write_text(
-        "machine_room,cabinet_business_status\n"
-        "403,Available\n"
-        "403,Sold\n",
-        encoding="utf-8",
-    )
-    backend = CsvSQLiteBackend({"resources": csv_path})
     captured = {}
 
     class FakeRunResult:
         final_output = {
             "answer": "ok",
-            "skill": "text2sql",
+            "subagent": "text2sql",
             "domain": "idc_resources",
             "sql": "SELECT 1",
             "rows": [{"value": 1}],
@@ -56,13 +48,13 @@ def test_text2sql_worker_uses_sdk_runner_with_isolated_context(tmp_path, monkeyp
         captured["max_turns"] = kwargs["max_turns"]
         return FakeRunResult()
 
-    monkeypatch.setattr("agent_runtime.core.skill_runner.Runner.run", fake_runner_run)
+    monkeypatch.setattr("agent_runtime.worker.subagent_runner.Runner.run", fake_runner_run)
 
     registry = _registry()
     runner = SubagentRunner(registry=registry, root=Path("."))
-    context = OrchestratorContext(
+    context = RuntimeContext(
+        run_id="test",
         session_id="test",
-        backend=backend,
         model_profiles={
             "orchestrator": ModelProfile(
                 role="orchestrator",
@@ -79,6 +71,7 @@ def test_text2sql_worker_uses_sdk_runner_with_isolated_context(tmp_path, monkeyp
                 max_tokens=128,
             ),
         },
+        state={"tenant": "root"},
     )
 
     result = asyncio.run(
@@ -90,12 +83,14 @@ def test_text2sql_worker_uses_sdk_runner_with_isolated_context(tmp_path, monkeyp
     )
 
     assert result.answer == "ok"
-    assert result.domain == "idc_resources"
+    assert result.extras["domain"] == "idc_resources"
     assert captured["input"] == "403机房有多少可用机柜？"
     assert captured["max_turns"] == WORKER_MAX_TURNS
-    assert isinstance(captured["context"], RunContext)
+    assert isinstance(captured["context"], RuntimeContext)
     assert captured["context"].run_id.startswith("text2sql-")
-    assert captured["context"].backend is backend
+    assert captured["context"].state["tenant"] == "root"
+    captured["context"].state["tenant"] = "worker"
+    assert context.state["tenant"] == "root"
     assert isinstance(captured["agent"].model, LoggingOpenAIChatCompletionsModel)
     assert {tool.name for tool in captured["agent"].tools} == {
         "get_current_time",
@@ -113,6 +108,13 @@ def test_text2sql_worker_uses_sdk_runner_with_isolated_context(tmp_path, monkeyp
         "worker_start",
         "worker_complete",
     ]
+    dispatch_payload = next(
+        event["payload"]
+        for event in context.events
+        if event["kind"] == "subagent_dispatch"
+    )
+    assert dispatch_payload["model_role"] == "orchestrator"
+    assert dispatch_payload["model"] == "orchestrator"
 
 
 def test_tool_registry_enable_disable(monkeypatch):
@@ -134,20 +136,10 @@ def test_tool_registry_enable_disable(monkeypatch):
     assert runner._build_subagent_tools(manifest) == []
 
 
-def test_worker_subagent_loads_convention_tools_without_code_registration(tmp_path, monkeypatch):
+def test_subagent_manifest_tools_field_is_rejected(tmp_path):
     subagents_root = tmp_path / "subagents"
-    (subagents_root / "__init__.py").parent.mkdir(parents=True, exist_ok=True)
-    (subagents_root / "__init__.py").write_text("", encoding="utf-8")
     subagent_dir = subagents_root / "fake_worker"
     subagent_dir.mkdir(parents=True)
-    (subagent_dir / "__init__.py").write_text("", encoding="utf-8")
-    (subagent_dir / "tools.py").write_text(
-        "from agents import function_tool\n\n"
-        "@function_tool\n"
-        "async def echo_tool(value: str) -> str:\n"
-        "    return value\n",
-        encoding="utf-8",
-    )
     (subagent_dir / "AGENT.yaml").write_text(
         "name: fake_worker\n"
         "description: Fake worker subagent.\n"
@@ -161,78 +153,19 @@ def test_worker_subagent_loads_convention_tools_without_code_registration(tmp_pa
         encoding="utf-8",
     )
     (subagent_dir / "prompt.md").write_text("Fake worker prompt.\n", encoding="utf-8")
-    monkeypatch.syspath_prepend(str(tmp_path))
-
     registry = AgentRegistry(subagents_root=subagents_root)
-    manifest = registry.get("fake_worker")
-    runner = SubagentRunner(registry=registry, root=tmp_path)
 
-    tools = runner._build_subagent_tools(manifest)
-    assert [tool.name for tool in tools] == ["echo_tool"]
-    assert runner._resolve_max_turns(manifest) == 3
-    assert runner._resolve_timeout_seconds(manifest) == 7.5
-
-    profile = ModelProfile(
-        role="orchestrator",
-        base_url="http://example.test/v1",
-        model_name="orchestrator",
-        api_key="not-needed",
-        max_tokens=128,
-    )
-    agent_tool = runner.build_worker_agent_tool(manifest=manifest, profile=profile)
-    assert agent_tool.name == "fake_worker"
-    assert getattr(agent_tool, "_is_agent_tool") is True
-    assert set(agent_tool.params_json_schema["properties"]) == {"task"}
+    with pytest.raises(ValueError, match="declares legacy tools"):
+        registry.discover()
 
 
-def test_worker_subagent_merges_extension_and_custom_tools(tmp_path, monkeypatch):
-    subagents_root = tmp_path / "subagents"
-    subagent_dir = subagents_root / "mixed_worker"
-    subagent_dir.mkdir(parents=True)
-    (subagent_dir / "extension.py").write_text(
-        "from agents import function_tool\n\n"
-        "@function_tool\n"
-        "async def extension_tool(value: str) -> str:\n"
-        "    return value\n\n"
-        "def register(api):\n"
-        "    api.tool(extension_tool)\n",
-        encoding="utf-8",
-    )
-    (subagent_dir / "tools.py").write_text(
-        "from agents import function_tool\n\n"
-        "@function_tool\n"
-        "async def custom_extra_tool(value: str) -> str:\n"
-        "    return value\n",
-        encoding="utf-8",
-    )
-    (subagent_dir / "AGENT.yaml").write_text(
-        "name: mixed_worker\n"
-        "description: Mixed worker subagent.\n"
-        "execution:\n"
-        "  mode: worker\n"
-        "extension:\n"
-        "  module: subagents.mixed_worker.extension\n"
-        "tools:\n"
-        "  - custom_extra_tool\n",
-        encoding="utf-8",
-    )
-    (subagent_dir / "prompt.md").write_text("Mixed worker prompt.\n", encoding="utf-8")
-    monkeypatch.syspath_prepend(str(tmp_path))
-    registry = AgentRegistry(subagents_root=subagents_root)
-    runner = SubagentRunner(registry=registry, root=tmp_path)
-
-    tools = runner._build_subagent_tools(registry.get("mixed_worker"))
-
-    assert [tool.name for tool in tools] == ["extension_tool", "custom_extra_tool"]
-
-
-def test_worker_subagent_loads_extension_tools_without_tools_py(tmp_path, monkeypatch):
+def test_worker_subagent_loads_extension_tools_from_public_subagent_api(tmp_path, monkeypatch):
     subagents_root = tmp_path / "subagents"
     subagent_dir = subagents_root / "extension_worker"
     subagent_dir.mkdir(parents=True)
     (subagent_dir / "extension.py").write_text(
-        "from agents import function_tool\n\n"
-        "@function_tool\n"
+        "from agent_runtime.subagent_api import tool\n\n"
+        "@tool\n"
         "async def extension_tool(value: str) -> str:\n"
         "    return value\n\n"
         "def build_prompt_context(manifest):\n"
@@ -247,6 +180,7 @@ def test_worker_subagent_loads_extension_tools_without_tools_py(tmp_path, monkey
         "description: Extension worker subagent.\n"
         "execution:\n"
         "  mode: worker\n"
+        "  model_role: orchestrator\n"
         "extension:\n"
         "  module: subagents.extension_worker.extension\n",
         encoding="utf-8",
@@ -266,47 +200,68 @@ def test_worker_subagent_loads_extension_tools_without_tools_py(tmp_path, monkey
     assert "from extension" in runner._build_worker_prompt(manifest)
 
 
-def test_worker_subagent_rejects_custom_extension_name_conflict(tmp_path, monkeypatch):
+def test_raw_extension_tool_gets_standard_events(tmp_path, monkeypatch):
     subagents_root = tmp_path / "subagents"
-    subagent_dir = subagents_root / "extension_conflict_worker"
+    subagent_dir = subagents_root / "raw_worker"
     subagent_dir.mkdir(parents=True)
     (subagent_dir / "extension.py").write_text(
-        "from agents import function_tool\n\n"
-        "@function_tool\n"
-        "async def shared_tool(value: str) -> str:\n"
-        "    return value\n\n"
+        "async def echo(value: str) -> dict:\n"
+        "    return {'echo': value, 'error': ''}\n\n"
         "def register(api):\n"
-        "    api.tool(shared_tool)\n",
-        encoding="utf-8",
-    )
-    (subagent_dir / "tools.py").write_text(
-        "from agents import function_tool\n\n"
-        "@function_tool\n"
-        "async def shared_tool(value: str) -> str:\n"
-        "    return value\n",
+        "    api.tool(echo)\n",
         encoding="utf-8",
     )
     (subagent_dir / "AGENT.yaml").write_text(
-        "name: extension_conflict_worker\n"
-        "description: Extension conflict worker subagent.\n"
+        "name: raw_worker\n"
+        "description: Raw callable worker.\n"
         "execution:\n"
         "  mode: worker\n"
+        "  model_role: orchestrator\n"
         "extension:\n"
-        "  module: subagents.extension_conflict_worker.extension\n"
-        "tools:\n"
-        "  - shared_tool\n",
+        "  module: subagents.raw_worker.extension\n",
         encoding="utf-8",
     )
-    (subagent_dir / "prompt.md").write_text("Extension conflict prompt.\n", encoding="utf-8")
+    (subagent_dir / "prompt.md").write_text("Raw worker prompt.\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     registry = AgentRegistry(subagents_root=subagents_root)
     runner = SubagentRunner(registry=registry, root=tmp_path)
+    tool = runner._build_subagent_tools(registry.get("raw_worker"))[0]
+    context = RuntimeContext(
+        run_id="raw-run",
+        session_id="raw-session",
+        model_profiles={
+            "orchestrator": ModelProfile(
+                role="orchestrator",
+                base_url="http://example.test/v1",
+                model_name="orchestrator",
+                api_key="not-needed",
+                max_tokens=128,
+            )
+        },
+    )
 
-    with pytest.raises(ValueError, match="conflicts with an extension tool"):
-        runner._build_subagent_tools(registry.get("extension_conflict_worker"))
+    output = asyncio.run(
+        tool.on_invoke_tool(
+            ToolContext(
+                context=context,
+                tool_name="echo",
+                tool_call_id="call_echo",
+                tool_arguments=json.dumps({"value": "hello"}),
+            ),
+            json.dumps({"value": "hello"}),
+        )
+    )
+
+    assert output == {"echo": "hello", "error": ""}
+    assert [event["kind"] for event in context.events] == [
+        "tool_call_start",
+        "tool_result",
+        "tool_call_end",
+    ]
+    assert context.events[1]["payload"]["metadata"]["tool_name"] == "echo"
 
 
-def test_generic_subagent_env_model_role_override(monkeypatch):
+def test_subagent_model_role_defaults_to_manifest_and_allows_env_override(monkeypatch):
     registry = _registry()
     runner = SubagentRunner(registry=registry, root=Path("."))
     manifest = registry.get("text2sql")
@@ -317,61 +272,67 @@ def test_generic_subagent_env_model_role_override(monkeypatch):
     assert runner.resolve_model_role(manifest) == "executor"
 
 
-def test_missing_convention_tools_for_declared_tools_raises_clear_error(tmp_path):
+def test_worker_uses_manifest_model_overrides(tmp_path, monkeypatch):
     subagents_root = tmp_path / "subagents"
-    subagent_dir = subagents_root / "broken_worker"
+    subagent_dir = subagents_root / "model_worker"
     subagent_dir.mkdir(parents=True)
+    (subagent_dir / "extension.py").write_text("def register(api):\n    return None\n", encoding="utf-8")
     (subagent_dir / "AGENT.yaml").write_text(
-        "name: broken_worker\n"
-        "description: Broken worker subagent.\n"
+        "name: model_worker\n"
+        "description: Model override worker.\n"
         "execution:\n"
         "  mode: worker\n"
-        "  model_role: orchestrator\n"
-        "tools:\n"
-        "  - missing_tool\n",
+        "  model_role: executor\n"
+        "model:\n"
+        "  llm: manifest-chat\n"
+        "  extra_body:\n"
+        "    temperature: 0\n"
+        "extension:\n"
+        "  module: subagents.model_worker.extension\n",
         encoding="utf-8",
     )
-    (subagent_dir / "prompt.md").write_text("Broken worker prompt.\n", encoding="utf-8")
-
-    registry = AgentRegistry(subagents_root=subagents_root)
-
-    with pytest.raises(ValueError, match="tools.py is missing"):
-        registry.discover()
-
-
-def test_declared_missing_tool_raises_clear_error(tmp_path, monkeypatch):
-    subagents_root = tmp_path / "subagents"
-    (subagents_root / "__init__.py").parent.mkdir(parents=True, exist_ok=True)
-    (subagents_root / "__init__.py").write_text("", encoding="utf-8")
-    subagent_dir = subagents_root / "broken_worker"
-    subagent_dir.mkdir(parents=True)
-    (subagent_dir / "__init__.py").write_text("", encoding="utf-8")
-    (subagent_dir / "tools.py").write_text(
-        "from agents import function_tool\n\n"
-        "@function_tool\n"
-        "async def existing_tool(value: str) -> str:\n"
-        "    return value\n",
-        encoding="utf-8",
-    )
-    (subagent_dir / "AGENT.yaml").write_text(
-        "name: broken_worker\n"
-        "description: Broken worker subagent.\n"
-        "execution:\n"
-        "  mode: worker\n"
-        "  model_role: orchestrator\n"
-        "tools:\n"
-        "  - existing_tool\n"
-        "  - missing_tool\n",
-        encoding="utf-8",
-    )
-    (subagent_dir / "prompt.md").write_text("Broken worker prompt.\n", encoding="utf-8")
+    (subagent_dir / "prompt.md").write_text("Model worker prompt.\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
+    captured = {}
 
+    class FakeRunResult:
+        final_output = {"answer": "ok", "subagent": "model_worker", "trace": [], "error": ""}
+
+    async def fake_runner_run(agent, input, **kwargs):
+        captured["agent"] = agent
+        return FakeRunResult()
+
+    monkeypatch.setattr("agent_runtime.worker.subagent_runner.Runner.run", fake_runner_run)
     registry = AgentRegistry(subagents_root=subagents_root)
     runner = SubagentRunner(registry=registry, root=tmp_path)
+    context = RuntimeContext(
+        run_id="test",
+        session_id="test",
+        model_profiles={
+            "executor": ModelProfile(
+                role="executor",
+                base_url="http://executor/v1",
+                model_name="executor-chat",
+                api_key="not-needed",
+                max_tokens=128,
+                extra_body={"top_p": 0.9},
+            )
+        },
+    )
 
-    with pytest.raises(ValueError, match="declares missing tools"):
-        runner._build_subagent_tools(registry.get("broken_worker"))
+    asyncio.run(
+        runner.run_subagent(
+            subagent_name="model_worker",
+            task="hello",
+            orchestrator_context=context,
+        )
+    )
+
+    assert str(captured["agent"].model.model) == "manifest-chat"
+    assert captured["agent"].model_settings.extra_body == {
+        "top_p": 0.9,
+        "temperature": 0,
+    }
 
 
 def test_worker_prompt_template_replaces_domains_and_memory(tmp_path):
@@ -404,6 +365,7 @@ def test_worker_prompt_can_use_extension_context(tmp_path, monkeypatch):
         "description: Context worker subagent.\n"
         "execution:\n"
         "  mode: worker\n"
+        "  model_role: orchestrator\n"
         "extension:\n"
         "  module: subagents.context_worker.extension\n",
         encoding="utf-8",
@@ -449,7 +411,6 @@ def test_subagent_result_coercion_normalizes_string_trace_items():
     result = _coerce_subagent_result(
         {
             "answer": "403机房没有可用机柜。",
-            "skill": "text2sql",
             "subagent": "text2sql",
             "domain": "idc_resources",
             "sql": "SELECT COUNT(*) AS count FROM resources",
@@ -471,15 +432,7 @@ def test_subagent_result_coercion_normalizes_string_trace_items():
     ]
 
 
-def test_text2sql_worker_timeout_returns_latest_execute_result(tmp_path, monkeypatch):
-    csv_path = tmp_path / "sea_cable_faults.csv"
-    csv_path.write_text(
-        "sea_cable_no,pop_fault_seg\n"
-        "NCP,S1\n",
-        encoding="utf-8",
-    )
-    backend = CsvSQLiteBackend({"sea_cable_faults": csv_path})
-
+def test_text2sql_worker_timeout_returns_standard_error(tmp_path, monkeypatch):
     async def fake_runner_run(agent, input, **kwargs):
         run_ctx = kwargs["context"]
         run_ctx.state["active_domain"] = "sea_cable_faults"
@@ -502,13 +455,13 @@ def test_text2sql_worker_timeout_returns_latest_execute_result(tmp_path, monkeyp
         )
         await asyncio.sleep(1)
 
-    monkeypatch.setattr("agent_runtime.core.skill_runner.Runner.run", fake_runner_run)
-    monkeypatch.setattr("agent_runtime.core.skill_runner.WORKER_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("agent_runtime.worker.subagent_runner.Runner.run", fake_runner_run)
+    monkeypatch.setattr("agent_runtime.worker.subagent_runner.WORKER_TIMEOUT_SECONDS", 0.01)
     registry = _registry()
     runner = SubagentRunner(registry=registry, root=Path("."))
-    context = OrchestratorContext(
+    context = RuntimeContext(
+        run_id="test",
         session_id="test",
-        backend=backend,
         model_profiles={
             "orchestrator": ModelProfile(
                 role="orchestrator",
@@ -535,20 +488,16 @@ def test_text2sql_worker_timeout_returns_latest_execute_result(tmp_path, monkeyp
         )
     )
 
-    assert result.domain == "sea_cable_faults"
-    assert result.sql == "SELECT * FROM sea_cable_faults"
-    assert result.result_id == "res_timeout"
-    assert result.row_count == 1
-    assert result.rows == [{"sea_cable_no": "NCP", "pop_fault_seg": "S1"}]
     assert result.answer == ""
     assert result.error.startswith("worker_timeout:")
+    assert result.artifacts == []
+    assert result.trace[-1]["stage"] == "execute"
 
 
-def test_subagent_result_coercion_maps_subagent_field():
+def test_subagent_result_coercion_keeps_unknown_fields_in_extras():
     result = _coerce_subagent_result(
         {
             "answer": "ok",
-            "skill": "text2sql",
             "subagent": "text2sql",
             "domain": "idc_resources",
             "trace": [],
@@ -556,8 +505,8 @@ def test_subagent_result_coercion_maps_subagent_field():
         "text2sql",
     )
 
-    assert result.domain == "idc_resources"
-    assert result.skill == "text2sql"
+    assert result.extras["domain"] == "idc_resources"
+    assert result.subagent == "text2sql"
 
 
 def test_subagent_tool_payload_keeps_structure_when_answer_is_present():
@@ -565,12 +514,19 @@ def test_subagent_tool_payload_keeps_structure_when_answer_is_present():
         SubagentResult(
             answer="查询完成。",
             subagent="text2sql",
-            domain="idc_resources",
-            sql="SELECT 1",
-            result_id="res_123",
-            row_count=1,
-            truncated=False,
-            rows=[{"count": 1}],
+            artifacts=[
+                {
+                    "type": "sql_result",
+                    "result_id": "res_123",
+                    "preview": [{"count": 1}],
+                    "metadata": {
+                        "domain": "idc_resources",
+                        "sql": "SELECT 1",
+                        "row_count": 1,
+                        "truncated": False,
+                    },
+                }
+            ],
             error="",
         )
     )
@@ -579,10 +535,18 @@ def test_subagent_tool_payload_keeps_structure_when_answer_is_present():
         "answer": "查询完成。",
         "error": "",
         "subagent": "text2sql",
-        "domain": "idc_resources",
-        "sql": "SELECT 1",
-        "result_id": "res_123",
-        "row_count": 1,
-        "truncated": False,
-        "sample_rows": [{"count": 1}],
+        "artifacts": [
+            {
+                "type": "sql_result",
+                "result_id": "res_123",
+                "preview": [{"count": 1}],
+                "metadata": {
+                    "domain": "idc_resources",
+                    "sql": "SELECT 1",
+                    "row_count": 1,
+                    "truncated": False,
+                },
+            }
+        ],
+        "extras": {},
     }

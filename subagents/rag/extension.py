@@ -6,14 +6,15 @@ import os
 from pathlib import Path
 from typing import Any
 
-from agents import RunContextWrapper, function_tool
-
-from agent_runtime.core.context import RunContext
-from agent_runtime.core.manifest_models import resolve_manifest_embedding_profile
-from agent_runtime.core.tool_helpers import emit_tool_finish, emit_tool_start
-from agent_runtime.core.tool_protocol import ToolOutput
-from agent_runtime.memory.embeddings import EmbeddingClient
-from agent_runtime.registry.skill_registry import AgentManifest
+from agent_runtime.subagent_api import (
+    SubagentToolContext,
+    ToolOutput,
+    subagent_context,
+    tool,
+    tool_finish,
+    tool_start,
+)
+from agent_runtime.shared.manifest import AgentManifest
 from subagents.rag.core.retrieval import (
     knowledge_index_summary,
     load_knowledge_index,
@@ -37,30 +38,24 @@ def validate_environment(_manifest: AgentManifest) -> None:
     _prepared_index_path()
 
 
-@function_tool
+@tool
 async def search_knowledge_base(
-    ctx: RunContextWrapper[RunContext],
+    ctx: SubagentToolContext,
     query: str,
     top_k: int = 5,
 ) -> str:
     """Search the prepared local Markdown knowledge base and return cited chunks."""
-    run_ctx = ctx.context
+    run_ctx = subagent_context(ctx)
     top_k = min(10, max(1, int(top_k or 5)))
     input_payload = {"query": query, "top_k": top_k}
-    emit_tool_start(run_ctx, tool_name="search_knowledge_base", input_payload=input_payload)
+    tool_start(run_ctx, tool_name="search_knowledge_base", input_payload=input_payload)
     try:
-        manifest = _active_manifest(run_ctx)
         index = load_knowledge_index(_prepared_index_path())
         chunks = search_knowledge_index(
             query=query,
             index=index,
             top_k=top_k,
-            embedding_client=EmbeddingClient(
-                resolve_manifest_embedding_profile(
-                    manifest,
-                    model_profiles=run_ctx.model_profiles,
-                )
-            ),
+            embedding_client=run_ctx.embedding_client(),
         )
         output = {
             "query": query,
@@ -75,13 +70,11 @@ async def search_knowledge_base(
             "count": 0,
             "error": f"{type(exc).__name__}: {exc}" if str(exc) else RAG_ENVIRONMENT_ERROR,
         }
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "rag_search",
-            "title": "检索知识库",
-            "input": input_payload,
-            "output": output,
-        }
+    run_ctx.trace(
+        stage="rag_search",
+        title="检索知识库",
+        input=input_payload,
+        output=output,
     )
     tool_output = ToolOutput(
         llm_content=output,
@@ -92,21 +85,21 @@ async def search_knowledge_base(
             "error": output.get("error", ""),
         },
     )
-    emit_tool_finish(
+    tool_finish(
         run_ctx,
         tool_name="search_knowledge_base",
-        tool_output=tool_output,
+        output=tool_output,
         status="failed" if output.get("error") else "completed",
     )
     return tool_output.to_llm_json()
 
 
-@function_tool
-async def get_knowledge_base_summary(ctx: RunContextWrapper[RunContext]) -> str:
+@tool
+async def get_knowledge_base_summary(ctx: SubagentToolContext) -> str:
     """Return the prepared Markdown knowledge base summary."""
-    run_ctx = ctx.context
+    run_ctx = subagent_context(ctx)
     input_payload: dict[str, Any] = {}
-    emit_tool_start(
+    tool_start(
         run_ctx,
         tool_name="get_knowledge_base_summary",
         input_payload=input_payload,
@@ -128,13 +121,11 @@ async def get_knowledge_base_summary(ctx: RunContextWrapper[RunContext]) -> str:
             "source_overview": [],
             "error": f"{type(exc).__name__}: {exc}" if str(exc) else RAG_ENVIRONMENT_ERROR,
         }
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "rag_summary",
-            "title": "读取知识库摘要",
-            "input": input_payload,
-            "output": output,
-        }
+    run_ctx.trace(
+        stage="rag_summary",
+        title="读取知识库摘要",
+        input=input_payload,
+        output=output,
     )
     tool_output = ToolOutput(
         llm_content=output,
@@ -144,19 +135,13 @@ async def get_knowledge_base_summary(ctx: RunContextWrapper[RunContext]) -> str:
             "error": output.get("error", ""),
         },
     )
-    emit_tool_finish(
+    tool_finish(
         run_ctx,
         tool_name="get_knowledge_base_summary",
-        tool_output=tool_output,
+        output=tool_output,
         status="failed" if output.get("error") else "completed",
     )
     return tool_output.to_llm_json()
-
-
-def _active_manifest(run_ctx: RunContext) -> AgentManifest:
-    if run_ctx.agent_registry is None:
-        raise ValueError("RunContext is missing agent_registry.")
-    return run_ctx.agent_registry.get(run_ctx.active_subagent or "rag")
 
 
 def _prepared_index_path() -> Path:

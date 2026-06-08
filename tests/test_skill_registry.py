@@ -18,7 +18,6 @@ def test_agent_registry_loads_subagents_only():
     assert text2sql.location.name == "AGENT.yaml"
     assert text2sql.execution.mode == "worker"
     assert text2sql.execution.model_role == "orchestrator"
-    assert text2sql.model.llm_role == "executor"
     assert text2sql.extension.module == "subagents.text2sql.extension"
     assert text2sql.tools == []
     assert "get_domain_schema" in text2sql.body
@@ -79,30 +78,33 @@ def test_yaml_agent_manifest_reads_prompt_and_runtime_metadata(tmp_path):
         "extension:\n"
         "  module: subagents.demo.extension\n"
         "model:\n"
-        "  llm_role: executor\n"
         "  llm: demo-chat\n"
         "  llm_base_url: http://llm/v1\n"
         "  embedding_role: embedding\n"
         "  embedding: demo-embedding\n"
         "  embedding_base_url: http://embedding/v1\n"
-        "tools:\n"
-        "  - search\n",
+        "  extra_body:\n"
+        "    temperature: 0\n"
+        "suggested_questions:\n"
+        "  - text: 演示问题\n"
+        "    reason: 演示原因\n",
         encoding="utf-8",
     )
     (agent_dir / "prompt.md").write_text("Prompt body", encoding="utf-8")
-    (agent_dir / "tools.py").write_text("", encoding="utf-8")
     (agent_dir / "ENVIRONMENT.md").write_text("Environment", encoding="utf-8")
 
     agent = AgentRegistry(subagents_root=subagents_root).get("demo")
 
     assert agent.body == "Prompt body"
     assert agent.extension.module == "subagents.demo.extension"
-    assert agent.model.llm_role == "executor"
     assert agent.model.llm == "demo-chat"
     assert agent.model.llm_base_url == "http://llm/v1"
     assert agent.model.embedding_role == "embedding"
     assert agent.model.embedding == "demo-embedding"
     assert agent.model.embedding_base_url == "http://embedding/v1"
+    assert agent.model.extra_body == {"temperature": 0}
+    assert agent.suggested_questions[0].text == "演示问题"
+    assert agent.suggested_questions[0].reason == "演示原因"
 
 
 def test_legacy_agent_md_manifest_is_not_a_subagent(tmp_path):
@@ -145,7 +147,7 @@ def test_agent_registry_cache_refreshes_when_manifest_changes(tmp_path):
     agent_dir.mkdir(parents=True)
     manifest_path = agent_dir / "AGENT.yaml"
     manifest_path.write_text(
-        "name: demo\ndescription: First\nexecution:\n  mode: worker\n",
+        "name: demo\ndescription: First\nexecution:\n  mode: worker\n  model_role: orchestrator\n",
         encoding="utf-8",
     )
     prompt_path = agent_dir / "prompt.md"
@@ -165,7 +167,7 @@ def test_agent_registry_cache_refreshes_when_manifest_changes(tmp_path):
     assert after_invalidate.body == "Body two changed"
 
 
-def test_worker_subagent_defaults_to_orchestrator_model_role(tmp_path):
+def test_worker_subagent_requires_explicit_model_role(tmp_path):
     subagents_root = tmp_path / "subagents"
     agent_dir = subagents_root / "demo"
     agent_dir.mkdir(parents=True)
@@ -178,13 +180,27 @@ def test_worker_subagent_defaults_to_orchestrator_model_role(tmp_path):
     )
     (agent_dir / "prompt.md").write_text("Body\n", encoding="utf-8")
 
+    with pytest.raises(ValueError, match="execution.model_role"):
+        AgentRegistry(subagents_root=subagents_root).get("demo")
+
+
+def test_worker_subagent_accepts_configured_model_role(tmp_path):
+    subagents_root = tmp_path / "subagents"
+    agent_dir = subagents_root / "demo"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "AGENT.yaml").write_text(
+        "name: demo\n"
+        "description: Wrong role\n"
+        "execution:\n"
+        "  mode: worker\n"
+        "  model_role: executor\n",
+        encoding="utf-8",
+    )
+    (agent_dir / "prompt.md").write_text("Body\n", encoding="utf-8")
+
     manifest = AgentRegistry(subagents_root=subagents_root).get("demo")
 
-    assert manifest.execution.model_role == "orchestrator"
-    assert manifest.model.llm_role == ""
-    assert manifest.model.llm == ""
-    assert manifest.model.embedding_role == ""
-    assert manifest.model.embedding == ""
+    assert manifest.execution.model_role == "executor"
 
 
 def test_extension_only_subagent_does_not_require_tools_py(tmp_path):
@@ -196,6 +212,7 @@ def test_extension_only_subagent_does_not_require_tools_py(tmp_path):
         "description: Extension-only worker\n"
         "execution:\n"
         "  mode: worker\n"
+        "  model_role: orchestrator\n"
         "extension:\n"
         "  module: subagents.demo.extension\n",
         encoding="utf-8",
@@ -229,6 +246,7 @@ def test_subagent_contract_rejects_module_overrides(tmp_path):
         "name: broken\n"
         "execution:\n"
         "  mode: worker\n"
+        "  model_role: orchestrator\n"
         "  tool_module: custom.tools\n",
         encoding="utf-8",
     )

@@ -41,9 +41,9 @@ SESSION_DB_PATH = DATA_DIR / "streamlit_sessions.sqlite"
 TEXT2SQL_AGENT_ROOT = ROOT / "subagents" / "text2sql"
 
 # -- Model defaults (hidden from UI) ----------------------------------
-BASE_URL = os.getenv("QWEN36_BASE_URL", "http://localhost:8000/v1")
-MODEL_NAME = os.getenv("QWEN36_MODEL", "qwen3.6-27b")
-MAX_OUTPUT_TOKENS = 8192
+BASE_URL = os.getenv("ORCHESTRATOR_BASE_URL") or os.getenv("QWEN36_BASE_URL", "http://localhost:8000/v1")
+MODEL_NAME = os.getenv("ORCHESTRATOR_MODEL") or os.getenv("QWEN36_MODEL", "qwen3.6-27b")
+MAX_OUTPUT_TOKENS = int(os.getenv("ORCHESTRATOR_MAX_TOKENS", "8192"))
 SQL_BASE_URL = os.getenv("EXECUTOR_BASE_URL", "http://localhost:8001/v1")
 SQL_MODEL_NAME = os.getenv("EXECUTOR_MODEL", "qwen3-32b")
 SQL_MAX_OUTPUT_TOKENS = int(os.getenv("EXECUTOR_MAX_TOKENS", "2048"))

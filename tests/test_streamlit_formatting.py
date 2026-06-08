@@ -6,7 +6,7 @@ from agent_runtime.ui.streamlit.resources import (
     reload_summary_changed,
 )
 from agent_runtime.ui.streamlit.results import RuntimeConfig
-from agent_runtime.ui.streamlit.sidebar import SidebarConfig
+from agent_runtime.ui.streamlit.sidebar import SidebarConfig, _clamp_output_tokens
 from agent_runtime.ui.streamlit.events import (
     event_payload,
     extract_detail,
@@ -130,3 +130,8 @@ def test_streamlit_ui_config_dataclasses_are_plain_values() -> None:
     assert sidebar_config.base_url == runtime_config.base_url
     assert sidebar_config.bot_id == "data_analyst"
     assert sidebar_config.sql_max_output_tokens == runtime_config.sql_max_tokens
+
+
+def test_streamlit_sidebar_clamps_output_token_defaults() -> None:
+    assert _clamp_output_tokens(262144) == 32768
+    assert _clamp_output_tokens(128) == 256

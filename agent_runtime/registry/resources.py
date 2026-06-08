@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_runtime.common import file_signature
+from agent_runtime.worker.subagent_extensions import clear_subagent_extension_cache
 from agent_runtime.registry.bot_registry import BotConfig, BotRegistry
 from agent_runtime.registry.skill_registry import AgentManifest, AgentRegistry, Skill, SkillRegistry
 
@@ -63,6 +64,7 @@ class ResourceLoader:
         self.skill_registry.invalidate()
         self.agent_registry.invalidate()
         self.bot_registry.invalidate()
+        clear_subagent_extension_cache()
         self._snapshot = None
         after = self.discover()
         return {

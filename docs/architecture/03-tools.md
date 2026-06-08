@@ -30,7 +30,7 @@ class ManifestBase:
     execution: ManifestExecution  
     # 包含：mode, model_role, max_turns, timeout
     
-    tools: list[str]       # 该 Subagent 自己的工具列表
+    tools: list[str]       # 已废弃；Subagent 工具统一通过 extension.py 注册
     memory: ManifestMemory # 该组件需要的 memory namespace
     domains: ManifestDomains
     model: ManifestModel
@@ -41,7 +41,7 @@ class ManifestBase:
 
 在系统启动时，这两个 Registry 会去读取对应目录下的配置文件。Subagent 固定采用
 `AGENT.yaml` 声明元数据，`prompt.md` 存放 worker prompt，`extension.py register(api)`
-作为工具、环境检查和 prompt context 的标准入口。`tools.py` 只用于显式声明的自定义补充工具。
+作为工具、环境检查和 prompt context 的唯一标准入口。
 Subagent 可额外提供 `ENVIRONMENT.md` 说明本地测试环境、生产连接方式和所需环境变量；
 该文件只面向开发/运维，不进入模型上下文。
 

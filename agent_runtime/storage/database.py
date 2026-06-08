@@ -161,6 +161,7 @@ class CsvSQLiteBackend:
         validate_readonly_sql(clean_sql)
         with self._lock:
             try:
+                self._connection.execute(f"EXPLAIN {clean_sql}")
                 cursor = self._connection.execute(clean_sql)
                 rows = [dict(row) for row in cursor.fetchmany(max_rows)]
             except sqlite3.Error as exc:
@@ -244,6 +245,7 @@ class SqlDatabaseBackend:
         validate_readonly_sql(clean_sql)
         with self._lock:
             try:
+                self._connection.execute(f"EXPLAIN {clean_sql}")
                 cursor = self._connection.execute(clean_sql)
                 rows = [dict(row) for row in cursor.fetchmany(max_rows)]
             except sqlite3.Error as exc:

@@ -1,23 +1,14 @@
-"""Memory retrieval, write, and todo orchestration for AgentWeave sessions."""
+"""Memory retrieval and write orchestration for AgentWeave sessions."""
 
 from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from agent_runtime.memory.embeddings import EmbeddingClient
 from agent_runtime.memory.memory_store import MemoryRecord, MemoryStore
 from agent_runtime.registry.skill_registry import ManifestBase
-
-TodoStatus = Literal["pending", "in_progress", "completed"]
-
-
-@dataclass(frozen=True)
-class TodoItem:
-    content: str
-    status: TodoStatus
-
 
 @dataclass(frozen=True)
 class MemorySearchResult:
@@ -29,7 +20,7 @@ class MemorySearchResult:
 
 
 class MemoryManager:
-    """Coordinates durable memory, session summaries, and session-local todos."""
+    """Coordinates durable memory, session summaries, and retrieval."""
 
     def __init__(
         self,
@@ -41,7 +32,6 @@ class MemoryManager:
         self.store = memory_store
         self.embedding_client = embedding_client
         self.enabled = enabled
-        self._todos_by_session: dict[str, list[TodoItem]] = {}
 
     def build_orchestrator_context(
         self,
@@ -59,9 +49,6 @@ class MemoryManager:
             session_records = self.store.load_namespace(f"session:{session_id}")
             if session_records:
                 parts.append(f"[session_summary]\n{session_records[0].content}")
-        todo_context = self.build_todo_context(session_id)
-        if todo_context:
-            parts.append(todo_context)
         return "\n\n".join(parts)
 
     def build_skill_context(
@@ -182,26 +169,6 @@ class MemoryManager:
     def clear(self) -> None:
         self.store.clear()
 
-    def update_todo(self, session_id: str, items: list[TodoItem]) -> list[TodoItem]:
-        normalized = [_normalize_todo(item) for item in items if item.content.strip()]
-        in_progress_count = sum(1 for item in normalized if item.status == "in_progress")
-        if in_progress_count > 1:
-            raise ValueError("Only one todo item can be in_progress.")
-        self._todos_by_session[session_id] = normalized
-        return list(normalized)
-
-    def get_todos(self, session_id: str) -> list[TodoItem]:
-        return list(self._todos_by_session.get(session_id, []))
-
-    def build_todo_context(self, session_id: str) -> str:
-        todos = self.get_todos(session_id)
-        if not todos:
-            return ""
-        lines = ["[todo_working_memory]"]
-        for item in todos:
-            lines.append(f"- [{item.status}] {item.content}")
-        return "\n".join(lines)
-
     def _backfill_embeddings(self, namespaces: list[str]) -> None:
         profile = getattr(self.embedding_client, "profile", None)
         if self.embedding_client is None or profile is None:
@@ -256,13 +223,6 @@ class MemoryManager:
                 )
         except Exception:
             return
-
-
-def _normalize_todo(item: TodoItem) -> TodoItem:
-    content = item.content.strip()
-    if item.status not in {"pending", "in_progress", "completed"}:
-        raise ValueError(f"Unsupported todo status: {item.status}")
-    return TodoItem(content=content, status=item.status)
 
 
 def _format_records(namespace: str, records: list[MemoryRecord]) -> str:

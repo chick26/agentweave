@@ -41,11 +41,16 @@ class AgentServiceConfig:
         data_dir = agentweave_data_dir(resolved_root)
         return cls(
             root=resolved_root,
-            base_url=os.getenv("QWEN36_BASE_URL", "http://localhost:8000/v1"),
-            model_name=os.getenv("QWEN36_MODEL", "qwen3.6-27b"),
+            base_url=os.getenv("ORCHESTRATOR_BASE_URL")
+            or os.getenv("QWEN36_BASE_URL", "http://localhost:8000/v1"),
+            model_name=os.getenv("ORCHESTRATOR_MODEL")
+            or os.getenv("QWEN36_MODEL", "qwen3.6-27b"),
             api_key=os.getenv("OPENAI_API_KEY", "not-needed"),
             session_db_path=data_dir / "server_sessions.sqlite",
-            max_tokens=int(os.getenv("QWEN36_MAX_TOKENS", "8192")),
+            max_tokens=int(
+                os.getenv("ORCHESTRATOR_MAX_TOKENS")
+                or os.getenv("QWEN36_MAX_TOKENS", "8192")
+            ),
             sql_base_url=os.getenv("EXECUTOR_BASE_URL") or None,
             sql_model_name=os.getenv("EXECUTOR_MODEL") or None,
             sql_max_tokens=int(os.getenv("EXECUTOR_MAX_TOKENS", "2048")),

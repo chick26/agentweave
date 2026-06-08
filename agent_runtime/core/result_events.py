@@ -8,7 +8,7 @@ from agent_runtime.common import coerce_bool
 
 
 def extract_result_metadata(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Extract result-store metadata from subagent execute trace events or tool results."""
+    """Extract result-store metadata from generic artifacts or result events."""
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
     for event in events:
@@ -38,19 +38,19 @@ def extract_result_metadata(events: list[dict[str, Any]]) -> list[dict[str, Any]
                 results.append(_parse_result_dict(merged, result_id))
             continue
 
-        # 3. Check legacy/fallback "execute" subagent trace for backward compatibility
-        if payload.get("stage") == "execute":
-            output = payload.get("output")
-            if isinstance(output, dict):
-                result_id = output.get("result_id")
+        # 3. Check generic subagent artifacts
+        result_payload = payload.get("result") if isinstance(payload.get("result"), dict) else payload
+        artifacts = result_payload.get("artifacts")
+        if isinstance(artifacts, list):
+            for artifact in artifacts:
+                if not isinstance(artifact, dict):
+                    continue
+                result_id = artifact.get("result_id")
                 if result_id and result_id not in seen:
                     seen.add(str(result_id))
-                    sql = output.get("sql") or payload.get("input") or ""
-                    parsed = _parse_result_dict(output, result_id)
-                    if sql and not parsed.get("sql"):
-                        parsed["sql"] = str(sql)
-                    results.append(parsed)
-            continue
+                    metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
+                    preview = artifact.get("preview") if isinstance(artifact.get("preview"), list) else []
+                    results.append(_parse_result_dict({**metadata, "sample_rows": preview}, result_id))
 
     return results
 

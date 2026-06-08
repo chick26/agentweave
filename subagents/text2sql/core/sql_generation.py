@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import re
 from typing import Any
 
-from agent_runtime.core.context import RunContext
-from agent_runtime.core.runtime_utils import (
-    call_chat_model,
-    json_dumps,
-    make_async_client,
-)
-import re
-from agent_runtime.storage.database import validate_readonly_sql
+from agent_runtime.shared.database import validate_readonly_sql
+from agent_runtime.shared.models import json_dumps
+from agent_runtime.subagent_api import SubagentContext
 from subagents.text2sql.core.domain_catalog import DomainConfig, business_metrics_to_prompt
 from subagents.text2sql.core.prompts import SQL_GENERATION_PROMPT
 from subagents.text2sql.core.sql_safety import validate_sql_uses_selected_schema
@@ -19,7 +16,7 @@ from subagents.text2sql.core.sql_safety import validate_sql_uses_selected_schema
 
 async def generate_sql(
     *,
-    run_ctx: RunContext,
+    ctx: SubagentContext,
     question: str,
     domain: DomainConfig,
     schema_text: str,
@@ -40,7 +37,7 @@ async def generate_sql(
     messages = [
         {
             "role": "system",
-            "content": SQL_GENERATION_PROMPT.format(dialect=_require_backend_dialect(run_ctx)),
+            "content": SQL_GENERATION_PROMPT.format(dialect=_require_backend_dialect(ctx)),
         },
         {
             "role": "user",
@@ -51,31 +48,23 @@ async def generate_sql(
             ),
         },
     ]
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "sql_prompt",
-            "title": "构建 SQL 提示词",
-            "input": messages,
-            "output": None,
-        }
+    ctx.trace(
+        stage="sql_prompt",
+        title="构建 SQL 提示词",
+        input=messages,
+        output=None,
     )
-    profile = run_ctx.model_profiles["executor"]
-    raw_output = await call_chat_model(
-        client=make_async_client(profile),
-        model_name=profile.model_name,
-        max_tokens=profile.max_tokens,
+    raw_output = await ctx.call_model(
+        role="executor",
         messages=messages,
         title="SQL 生成模型调用",
         kind="sql_model",
-        log_callback=lambda log: run_ctx.emit_payload(kind="model_call", payload=log),
     )
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "sql_model_output",
-            "title": "SQL 模型推理",
-            "input": None,
-            "output": raw_output,
-        }
+    ctx.trace(
+        stage="sql_model_output",
+        title="SQL 模型推理",
+        input=None,
+        output=raw_output,
     )
     sql = extract_sql(raw_output)
     validation_errors: list[str] = []
@@ -83,22 +72,21 @@ async def generate_sql(
         validate_readonly_sql(sql)
     except ValueError as exc:
         validation_errors.append(str(exc))
-    try:
-        validate_sql_uses_selected_schema(
-            sql,
-            selected_columns=selected_columns,
-            allowed_tables=[domain.table],
-        )
-    except ValueError as exc:
-        validation_errors.append(str(exc))
+    if _strict_schema_validation_enabled():
+        try:
+            validate_sql_uses_selected_schema(
+                sql,
+                selected_columns=selected_columns,
+                allowed_tables=[domain.table],
+            )
+        except ValueError as exc:
+            validation_errors.append(str(exc))
     validation_error = "; ".join(validation_errors)
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "sql_extract",
-            "title": "提取 SQL",
-            "input": raw_output,
-            "output": {"sql": sql, "validation_error": validation_error},
-        }
+    ctx.trace(
+        stage="sql_extract",
+        title="提取 SQL",
+        input=raw_output,
+        output={"sql": sql, "validation_error": validation_error},
     )
     return {
         "sql": sql,
@@ -107,8 +95,8 @@ async def generate_sql(
     }
 
 
-def _require_backend_dialect(run_ctx: RunContext) -> str:
-    backend = getattr(run_ctx, "backend", None)
+def _require_backend_dialect(ctx: SubagentContext) -> str:
+    backend = ctx.cache.get("database_backend")
     return str(getattr(backend, "dialect", "SQL"))
 
 
@@ -151,3 +139,12 @@ def _normalize_sql_statement(sql: str) -> str:
             continue
         kept.append(clean)
     return " ".join(kept)
+
+
+def _strict_schema_validation_enabled() -> bool:
+    return os.getenv("TEXT2SQL_STRICT_SCHEMA_VALIDATION", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }

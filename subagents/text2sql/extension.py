@@ -7,18 +7,23 @@ import json
 from pathlib import Path
 from typing import Any
 
-from agents import RunContextWrapper, function_tool
 from pydantic import BaseModel
 
-from agent_runtime.common import columns_from_rows
-from agent_runtime.core.context import RunContext
-from agent_runtime.core.events import EventKind
-from agent_runtime.core.tool_protocol import ToolOutput
-from agent_runtime.storage.database import CsvSQLiteBackend, DatabaseBackend, SqlDatabaseBackend
-from agent_runtime.core.runtime_utils import (
+from agent_runtime.subagent_api import (
+    SubagentContext,
+    SubagentToolContext,
+    ToolOutput,
+    subagent_context,
+    tool,
+    tool_finish,
+    tool_start,
+)
+from agent_runtime.shared.common import columns_from_rows
+from agent_runtime.shared.database import CsvSQLiteBackend, DatabaseBackend, SqlDatabaseBackend
+from agent_runtime.shared.manifest import AgentManifest
+from agent_runtime.shared.models import (
     get_current_time_payload,
 )
-from agent_runtime.registry.skill_registry import AgentManifest, AgentRegistry
 from subagents.text2sql.core.domain_catalog import (
     Text2SQLDomainCatalog,
     business_metrics_to_prompt,
@@ -28,7 +33,6 @@ from subagents.text2sql.core.sql_generation import generate_sql
 from subagents.text2sql.core.sql_safety import (
     validate_sql_uses_selected_schema,
 )
-from agent_runtime.core.tool_helpers import emit_tool_start, emit_tool_finish
 
 
 SQL_RESULT_SAMPLE_ROWS = int(os.getenv("SQL_RESULT_SAMPLE_ROWS", "50"))
@@ -71,9 +75,9 @@ class LinkedValueInput(BaseModel):
     source: str = "search_domain_values"
     query: str = ""
 
-@function_tool
+@tool
 async def get_current_time(
-    ctx: RunContextWrapper[RunContext],
+    ctx: SubagentToolContext,
     timezone_name: str = "",
 ) -> str:
     """Resolve current date and time for relative-time SQL filters.
@@ -85,8 +89,8 @@ async def get_current_time(
     Args:
         timezone_name: Optional IANA timezone name. Empty means application default.
     """
-    run_ctx = ctx.context
-    emit_tool_start(
+    run_ctx = subagent_context(ctx)
+    tool_start(
         run_ctx,
         tool_name="get_current_time",
         input_payload={"timezone_name": timezone_name},
@@ -96,13 +100,11 @@ async def get_current_time(
         output = get_current_time_payload(requested_timezone)
     except ValueError as exc:
         output = {"timezone": requested_timezone, "error": str(exc)}
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "current_time",
-            "title": "获取当前时间",
-            "input": {"timezone_name": timezone_name or "(default)"},
-            "output": output,
-        }
+    run_ctx.trace(
+        stage="current_time",
+        title="获取当前时间",
+        input={"timezone_name": timezone_name or "(default)"},
+        output=output,
     )
     tool_output = ToolOutput(
         llm_content=output,
@@ -112,24 +114,24 @@ async def get_current_time(
             "error": output.get("error", "") if isinstance(output, dict) else "",
         },
     )
-    emit_tool_finish(
+    tool_finish(
         run_ctx,
         tool_name="get_current_time",
-        tool_output=tool_output,
+        output=tool_output,
         status="failed" if tool_output.metadata.get("error") else "completed",
     )
     return tool_output.to_llm_json()
 
 
-@function_tool
-async def list_domains(ctx: RunContextWrapper[RunContext]) -> str:
+@tool
+async def list_domains(ctx: SubagentToolContext) -> str:
     """List Text2SQL query domains available to this subagent.
 
     Use this when the injected <domains> context is insufficient or ambiguous.
     It returns only lightweight table/domain summaries, not full schemas.
     """
-    run_ctx = ctx.context
-    emit_tool_start(
+    run_ctx = subagent_context(ctx)
+    tool_start(
         run_ctx,
         tool_name="list_domains",
         input_payload={},
@@ -149,44 +151,42 @@ async def list_domains(ctx: RunContextWrapper[RunContext]) -> str:
             "domains": [],
             "error": str(exc),
         }
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "list_domains",
-            "title": "列出数据域",
-            "input": {},
-            "output": payload,
-        }
+    run_ctx.trace(
+        stage="list_domains",
+        title="列出数据域",
+        input={},
+        output=payload,
     )
     tool_output = ToolOutput(
         llm_content=payload,
         ui_content=payload,
         metadata={"tool_name": "list_domains", "error": payload.get("error") or ""},
     )
-    emit_tool_finish(
+    tool_finish(
         run_ctx,
         tool_name="list_domains",
-        tool_output=tool_output,
+        output=tool_output,
         status="failed" if tool_output.metadata.get("error") else "completed",
     )
     return tool_output.to_llm_json()
 
 
-@function_tool
+@tool
 async def get_domain_schema(
-    ctx: RunContextWrapper[RunContext],
+    ctx: SubagentToolContext,
     domain_name: str,
 ) -> str:
     """Load the real database schema for one Text2SQL domain.
 
     Always call this before generating SQL. The tool activates the selected
-    domain/table in RunContext and returns schema, columns, text fields,
+    domain/table in the runtime context and returns schema, columns, text fields,
     business metrics, and domain notes.
 
     Args:
         domain_name: Domain name selected from <domains> or list_domains.
     """
-    run_ctx = ctx.context
-    emit_tool_start(
+    run_ctx = subagent_context(ctx)
+    tool_start(
         run_ctx,
         tool_name="get_domain_schema",
         input_payload={"domain_name": domain_name},
@@ -213,13 +213,11 @@ async def get_domain_schema(
             "notes": "",
             "error": str(exc),
         }
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "schema",
-            "title": f"加载 Domain Schema: {domain_name}",
-            "input": {"domain_name": domain_name},
-            "output": payload,
-        }
+    run_ctx.trace(
+        stage="schema",
+        title=f"加载 Domain Schema: {domain_name}",
+        input={"domain_name": domain_name},
+        output=payload,
     )
     tool_output = ToolOutput(
         llm_content=payload,
@@ -231,18 +229,18 @@ async def get_domain_schema(
             "error": payload.get("error") or "",
         },
     )
-    emit_tool_finish(
+    tool_finish(
         run_ctx,
         tool_name="get_domain_schema",
-        tool_output=tool_output,
+        output=tool_output,
         status="failed" if tool_output.metadata.get("error") else "completed",
     )
     return tool_output.to_llm_json()
 
 
-@function_tool
+@tool
 async def search_domain_values(
-    ctx: RunContextWrapper[RunContext],
+    ctx: SubagentToolContext,
     domain_name: str,
     query: str,
     fields: list[str] | None = None,
@@ -257,16 +255,16 @@ async def search_domain_values(
         query: User-provided literal snippet to link against real data values.
         fields: Optional field list. Empty means the domain's text_fields.
     """
-    run_ctx = ctx.context
+    run_ctx = subagent_context(ctx)
     input_payload = {"domain_name": domain_name, "query": query, "fields": fields or []}
-    emit_tool_start(
+    tool_start(
         run_ctx,
         tool_name="search_domain_values",
         input_payload=input_payload,
     )
     try:
         domain = _domain_catalog_from_context(ctx).get_domain(domain_name)
-        if run_ctx.state.get("active_domain") != domain.name or run_ctx.state.get("active_table") != domain.table:
+        if run_ctx.cache.get("active_domain") != domain.name or run_ctx.cache.get("active_table") != domain.table:
             _activate_domain_context(run_ctx, domain)
         linked_values = _search_value_candidates(run_ctx, query, fields)
         payload = {
@@ -291,18 +289,18 @@ async def search_domain_values(
             "error": payload.get("error") or "",
         },
     )
-    emit_tool_finish(
+    tool_finish(
         run_ctx,
         tool_name="search_domain_values",
-        tool_output=tool_output,
+        output=tool_output,
         status="failed" if tool_output.metadata.get("error") else "completed",
     )
     return tool_output.to_llm_json()
 
 
-@function_tool
+@tool
 async def generate_readonly_sql(
-    ctx: RunContextWrapper[RunContext],
+    ctx: SubagentToolContext,
     question: str,
     domain_name: str,
     linked_values: list[LinkedValueInput] | None = None,
@@ -320,7 +318,7 @@ async def generate_readonly_sql(
         linked_values: Optional linked values returned by search_domain_values.
         constraints: Optional correction note from one failed execution.
     """
-    run_ctx = ctx.context
+    run_ctx = subagent_context(ctx)
     linked_value_payloads = _linked_values_to_payload(linked_values)
     input_payload = {
         "question": question,
@@ -328,7 +326,7 @@ async def generate_readonly_sql(
         "linked_values": linked_value_payloads,
         "constraints": constraints,
     }
-    emit_tool_start(
+    tool_start(
         run_ctx,
         tool_name="generate_readonly_sql",
         input_payload=input_payload,
@@ -338,7 +336,7 @@ async def generate_readonly_sql(
         schema_text = _activate_domain_context(run_ctx, domain)
         selected_columns = _require_backend(run_ctx).get_columns(domain.table)
         generated = await generate_sql(
-            run_ctx=run_ctx,
+            ctx=run_ctx,
             question=question,
             domain=domain,
             schema_text=schema_text,
@@ -374,18 +372,18 @@ async def generate_readonly_sql(
             "error": payload.get("error") or payload.get("validation_error") or "",
         },
     )
-    emit_tool_finish(
+    tool_finish(
         run_ctx,
         tool_name="generate_readonly_sql",
-        tool_output=tool_output,
+        output=tool_output,
         status="failed" if tool_output.metadata.get("error") else "completed",
     )
     return tool_output.to_llm_json()
 
 
-@function_tool
+@tool
 async def execute_sql(
-    ctx: RunContextWrapper[RunContext],
+    ctx: SubagentToolContext,
     domain_name: str,
     sql: str,
 ) -> str:
@@ -401,24 +399,22 @@ async def execute_sql(
         domain_name: Domain name used for schema validation.
         sql: SQL statement to execute.
     """
-    run_ctx = ctx.context
-    run_ctx.emit_payload(
-        kind=EventKind.TOOL_CALL_START,
-        payload={
-            "stage": "tool_call_start",
-            "tool_name": "execute_sql",
-            "input": {"domain_name": domain_name, "sql": sql},
-        },
+    run_ctx = subagent_context(ctx)
+    tool_start(
+        run_ctx,
+        tool_name="execute_sql",
+        input_payload={"domain_name": domain_name, "sql": sql},
     )
     try:
         domain = _domain_catalog_from_context(ctx).get_domain(domain_name)
-        if run_ctx.state.get("active_domain") != domain.name or run_ctx.state.get("active_table") != domain.table:
+        if run_ctx.cache.get("active_domain") != domain.name or run_ctx.cache.get("active_table") != domain.table:
             _activate_domain_context(run_ctx, domain)
-        validate_sql_uses_selected_schema(
-            sql,
-            selected_columns=_require_backend(run_ctx).get_columns(domain.table),
-            allowed_tables=[domain.table],
-        )
+        if _strict_schema_validation_enabled():
+            validate_sql_uses_selected_schema(
+                sql,
+                selected_columns=_require_backend(run_ctx).get_columns(domain.table),
+                allowed_tables=[domain.table],
+            )
         fetched_rows = _require_backend(run_ctx).execute_sql(
             sql,
             max_rows=SQL_RESULT_STORE_MAX_ROWS + 1,
@@ -447,13 +443,11 @@ async def execute_sql(
             "error": str(exc),
         }
     status = "failed" if output.get("error") else "completed"
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "execute",
-            "title": "执行查询",
-            "input": {"domain_name": domain_name, "sql": sql},
-            "output": output,
-        }
+    run_ctx.trace(
+        stage="execute",
+        title="执行查询",
+        input={"domain_name": domain_name, "sql": sql},
+        output=output,
     )
     tool_output = ToolOutput(
         llm_content=output,
@@ -467,89 +461,59 @@ async def execute_sql(
             "error": output.get("error") or "",
         },
     )
-    run_ctx.emit_payload(
-        kind=EventKind.TOOL_RESULT,
-        payload={
-            "stage": "tool_result",
-            "tool_name": "execute_sql",
-            "status": status,
-            "result_id": output.get("result_id") or "",
-            "row_count": output.get("row_count") or 0,
-            "stored_row_count": output.get("stored_row_count") or 0,
-            "has_more": bool(output.get("has_more")),
-            "ui_content": tool_output.ui_content,
-            "metadata": tool_output.metadata,
-            "error": output.get("error") or "",
-        },
-        error=output.get("error") or "",
-    )
-    if output.get("result_id"):
-        run_ctx.emit_payload(
-            kind=EventKind.RESULT_CREATED,
-            payload={
-                "stage": "result_created",
-                "tool_name": "execute_sql",
-                "ui_content": tool_output.ui_content,
-                "metadata": tool_output.metadata,
-            },
+    if tool_output.metadata.get("result_id"):
+        run_ctx.result_created(
+            tool_name="execute_sql",
+            ui_content=tool_output.ui_content,
+            metadata=tool_output.metadata,
         )
-    run_ctx.emit_payload(
-        kind=EventKind.TOOL_CALL_END,
-        payload={
-            "stage": "tool_call_end",
-            "tool_name": "execute_sql",
-            "status": status,
-            "result_id": output.get("result_id") or "",
-            "row_count": output.get("row_count") or 0,
-            "stored_row_count": output.get("stored_row_count") or 0,
-            "has_more": bool(output.get("has_more")),
-            "error": output.get("error") or "",
-        },
-        error=output.get("error") or "",
+    tool_finish(
+        run_ctx,
+        tool_name="execute_sql",
+        output=tool_output,
+        status=status,
     )
     return tool_output.to_llm_json()
 
 
-def _activate_domain_context(run_ctx: RunContext, domain: Any) -> str:
+def _activate_domain_context(run_ctx: SubagentContext, domain: Any) -> str:
     backend = _require_backend(run_ctx)
-    run_ctx.state["active_domain"] = domain.name
-    run_ctx.state["active_table"] = domain.table
-    run_ctx.state["active_text_fields"] = list(domain.text_fields)
-    run_ctx.state["active_field_descriptions"] = dict(domain.field_descriptions)
+    run_ctx.cache["active_domain"] = domain.name
+    run_ctx.cache["active_table"] = domain.table
+    run_ctx.cache["active_text_fields"] = list(domain.text_fields)
+    run_ctx.cache["active_field_descriptions"] = dict(domain.field_descriptions)
     schema_text = backend.get_schema_for_prompt(
         domain.table,
         domain.field_descriptions,
     )
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "activation",
-            "title": f"Domain: {domain.name}",
-            "input": {"domain_name": domain.name},
-            "output": {
-                "name": domain.name,
-                "description": domain.description,
-                "table": domain.table,
-            },
-        }
+    run_ctx.trace(
+        stage="activation",
+        title=f"Domain: {domain.name}",
+        input={"domain_name": domain.name},
+        output={
+            "name": domain.name,
+            "description": domain.description,
+            "table": domain.table,
+        },
     )
     return schema_text
 
 
 def _search_value_candidates(
-    run_ctx: RunContext,
+    run_ctx: SubagentContext,
     query: str,
     field_list: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     backend = _require_backend(run_ctx)
-    selected_columns = set(backend.get_columns(run_ctx.state.get("active_table", "")))
+    selected_columns = set(backend.get_columns(run_ctx.cache.get("active_table", "")))
     fields = [
-        field for field in list(field_list or run_ctx.state.get("active_text_fields", []))
+        field for field in list(field_list or run_ctx.cache.get("active_text_fields", []))
         if field in selected_columns
     ]
     results: list[dict[str, Any]] = []
     for field_name in fields:
         for value, count in backend.search_distinct_values(
-            run_ctx.state.get("active_table", ""),
+            run_ctx.cache.get("active_table", ""),
             field_name,
             query,
             limit=10,
@@ -557,37 +521,31 @@ def _search_value_candidates(
             results.append({"field": field_name, "value": value, "count": count, "query": query})
     results.sort(key=lambda item: -item["count"])
     results = results[:20]
-    run_ctx.emit_subagent_trace(
-        {
-            "stage": "search_values",
-            "title": f"搜索候选值: {query}",
-            "input": {
-                "query": query,
-                "fields": ",".join(fields) if field_list else "(all)",
-            },
-            "output": results,
-        }
+    run_ctx.trace(
+        stage="search_values",
+        title=f"搜索候选值: {query}",
+        input={
+            "query": query,
+            "fields": ",".join(fields) if field_list else "(all)",
+        },
+        output=results,
     )
     return results
 
 
 def _build_execute_output(
     *,
-    run_ctx: RunContext,
+    run_ctx: SubagentContext,
     sql: str,
     rows: list[dict[str, Any]],
     store_truncated: bool = False,
 ) -> dict[str, Any]:
     columns = columns_from_rows(rows)
-    result_id = ""
-    result_store = getattr(run_ctx, "result_store", None)
-    if result_store is not None:
-        result_id = result_store.create_result(
-            run_id=run_ctx.run_id,
-            domain=run_ctx.state.get("active_domain", ""),
-            sql=sql,
-            rows=rows,
-        )
+    result_id = run_ctx.store_result(
+        domain=run_ctx.cache.get("active_domain", ""),
+        sql=sql,
+        rows=rows,
+    )
     sample_rows = _compact_rows_for_tool(rows[:SQL_RESULT_SAMPLE_ROWS])
     stored_row_count = len(rows)
     has_more = bool(store_truncated)
@@ -657,10 +615,11 @@ def _linked_values_to_payload(
     return [item.model_dump() for item in linked_values]
 
 
-def _require_backend(run_ctx: RunContext) -> DatabaseBackend:
-    backend = getattr(run_ctx, "backend", None)
+def _require_backend(run_ctx: SubagentContext) -> DatabaseBackend:
+    backend = run_ctx.cache.get("database_backend")
     if backend is None:
-        backend = _connect_backend(getattr(run_ctx, "runtime_root", None) or Path.cwd())
+        backend = _connect_backend(run_ctx.runtime_root or Path.cwd())
+        run_ctx.cache["database_backend"] = backend
     return backend
 
 
@@ -703,13 +662,14 @@ def _resolve_path(root: Path, value: str) -> Path:
     return root / path
 
 
-def _registry_from_context(ctx: RunContextWrapper[RunContext]) -> AgentRegistry:
-    registry = getattr(ctx.context, "agent_registry", None)
-    if isinstance(registry, AgentRegistry):
-        return registry
-    raise RuntimeError("RunContext is missing AgentRegistry")
+def _strict_schema_validation_enabled() -> bool:
+    return os.getenv("TEXT2SQL_STRICT_SCHEMA_VALIDATION", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
-def _domain_catalog_from_context(ctx: RunContextWrapper[RunContext]) -> Text2SQLDomainCatalog:
-    registry = _registry_from_context(ctx)
-    return Text2SQLDomainCatalog.from_agent(registry.get("text2sql"))
+def _domain_catalog_from_context(ctx: SubagentToolContext) -> Text2SQLDomainCatalog:
+    return Text2SQLDomainCatalog.from_agent(subagent_context(ctx).manifest)

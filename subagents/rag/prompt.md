@@ -31,6 +31,13 @@
   "answer": "中文简洁回答，包含来源说明",
   "subagent": "rag",
   "trace": [],
-  "error": ""
+  "error": "",
+  "artifacts": [
+    {
+      "type": "citations",
+      "items": []
+    }
+  ],
+  "extras": {}
 }
 </output_json_schema>

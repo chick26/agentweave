@@ -1,12 +1,13 @@
-"""Tests for memory retrieval, writing, and todo management."""
+"""Tests for memory retrieval and writing."""
 
 from pathlib import Path
 
 import pytest
 
 from agent_runtime.memory.embeddings import EmbeddingProfile
-from agent_runtime.memory.memory_manager import MemoryManager, TodoItem
+from agent_runtime.memory.memory_manager import MemoryManager
 from agent_runtime.memory.memory_store import MemoryStore
+from agent_runtime.memory.todo_state import TodoItem, TodoState
 from agent_runtime.registry.skill_registry import AgentRegistry
 
 
@@ -55,11 +56,11 @@ def test_memory_manager_builds_skill_context(tmp_path):
     assert "不要注入 worker。" not in context
 
 
-def test_update_todo_validates_single_in_progress(tmp_path):
-    manager = MemoryManager(MemoryStore(tmp_path / "agent_memory.sqlite"))
+def test_todo_state_validates_single_in_progress():
+    todo_state = TodoState()
 
     with pytest.raises(ValueError):
-        manager.update_todo(
+        todo_state.update(
             "abc",
             [
                 TodoItem("第一步", "in_progress"),
@@ -68,9 +69,9 @@ def test_update_todo_validates_single_in_progress(tmp_path):
         )
 
 
-def test_todo_context_is_session_local(tmp_path):
-    manager = MemoryManager(MemoryStore(tmp_path / "agent_memory.sqlite"))
-    manager.update_todo(
+def test_todo_state_context_is_session_local():
+    todo_state = TodoState()
+    todo_state.update(
         "abc",
         [
             TodoItem("确认查询领域", "completed"),
@@ -78,13 +79,12 @@ def test_todo_context_is_session_local(tmp_path):
         ],
     )
 
-    context = manager.build_orchestrator_context("abc")
+    context = todo_state.format_context("abc")
 
     assert "[todo_working_memory]" in context
     assert "[completed] 确认查询领域" in context
     assert "[in_progress] 执行 SQL 查询" in context
-    assert manager.build_orchestrator_context("other") == ""
-    assert manager.load_namespace("project") == []
+    assert todo_state.format_context("other") == ""
 
 
 def test_memory_manager_retrieves_vector_context_and_tracks_events(tmp_path):
@@ -124,12 +124,11 @@ def test_memory_manager_falls_back_when_embedding_is_unavailable(tmp_path):
     assert result.fallback is True
 
 
-def test_memory_manager_disabled_skips_durable_memory_but_keeps_todos(tmp_path):
+def test_memory_manager_disabled_skips_durable_memory(tmp_path):
     store = MemoryStore(tmp_path / "agent_memory.sqlite")
     store.write("project", "metric_rule", "保留项目口径。")
     store.write("session:abc", "summary", "不要注入摘要。")
     manager = MemoryManager(store, enabled=False)
-    manager.update_todo("abc", [TodoItem("继续当前任务", "in_progress")])
 
     result = manager.retrieve("项目口径", ["project"])
     context = manager.build_orchestrator_context("abc", current_query="项目口径")
@@ -138,7 +137,6 @@ def test_memory_manager_disabled_skips_durable_memory_but_keeps_todos(tmp_path):
     assert result.strategy == "disabled"
     assert "保留项目口径。" not in context
     assert "不要注入摘要。" not in context
-    assert "[todo_working_memory]" in context
 
 
 def _fake_vector(text: str) -> list[float]:

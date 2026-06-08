@@ -13,16 +13,15 @@ __all__ = [
     "EventBus",
     "EventKind",
     "MemoryManager",
-    "OrchestratorContext",
     "ResultStore",
-    "RunContext",
+    "RuntimeContext",
     "SkillRegistry",
     "SqlDatabaseBackend",
 ]
 
 
 _LAZY_EXPORTS = {
-    "AgentRuntime": ("agent_runtime.core.orchestrator", "AgentRuntime"),
+    "AgentRuntime": ("agent_runtime.core.runtime", "AgentRuntime"),
     "AgentRegistry": ("agent_runtime.registry.skill_registry", "AgentRegistry"),
     "BotConfig": ("agent_runtime.registry.bot_registry", "BotConfig"),
     "BotRegistry": ("agent_runtime.registry.bot_registry", "BotRegistry"),
@@ -30,9 +29,8 @@ _LAZY_EXPORTS = {
     "EventBus": ("agent_runtime.core.events", "EventBus"),
     "EventKind": ("agent_runtime.core.events", "EventKind"),
     "MemoryManager": ("agent_runtime.memory.memory_manager", "MemoryManager"),
-    "OrchestratorContext": ("agent_runtime.core.context", "OrchestratorContext"),
     "ResultStore": ("agent_runtime.storage.result_store", "ResultStore"),
-    "RunContext": ("agent_runtime.core.context", "RunContext"),
+    "RuntimeContext": ("agent_runtime.core.context", "RuntimeContext"),
     "SkillRegistry": ("agent_runtime.registry.skill_registry", "SkillRegistry"),
     "SqlDatabaseBackend": ("agent_runtime.storage.database", "SqlDatabaseBackend"),
 }

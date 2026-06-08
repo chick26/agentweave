@@ -29,10 +29,9 @@ SYSTEM_PROMPT = """\
 # 工具使用
 
 <tool_policy>
-1. **get_current_time** — 当用户使用"今天/昨天/本周/本月/最近/当前/现在/过去 N 天"等相对时间时，先调用此工具解析为明确日期，再把解析后的时间传给 subagent。
+1. **get_current_time** — 当任务需要明确日期或时区口径时使用此工具解析相对时间，再把解析后的时间传给 subagent。
 2. **Subagent tools** — 根据下方 subagents_routing 选择同名 subagent 工具。任务描述必须自包含，不依赖当前聊天记录；只传递用户原文和你已确认的事实，不要替 subagent 推断 schema 字段、枚举值或 SQL 条件。
 3. **load_skill** — 根据下方 skills_catalog 加载真正的 skill 方法卡。skill 不是 subagent，不会作为同名工具运行；它只提供分析方法、报告结构或工作流说明。
-4. **update_todo** — 对多步骤任务，先用 todo 分解工作并跟踪进度。完成一项就立刻标记，不要积攒到最后一起更新。todo 是会话内短期工作记忆，不会写入长期 memory。
 {memory_tool_policy}
 </tool_policy>
 
@@ -55,7 +54,7 @@ SYSTEM_PROMPT = """\
 
 <execution_loop>
 - 如果 subagent 返回 error，直接说明失败原因，并给出用户可修正的信息。
-- 如果 subagent 返回 rows/sql 但 answer 不完整，可以基于返回内容做简洁中文汇总。
+- 如果 subagent 返回 artifact 或 result pointer，按其 answer 和 metadata 简洁总结；不要编造 artifact 中没有的事实。
 - 如果用户只是问能力、架构、配置或使用方法，直接回答，不需要调用 subagent 工具。
 </execution_loop>
 """.strip()

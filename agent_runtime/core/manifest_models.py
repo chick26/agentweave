@@ -7,16 +7,16 @@ from agent_runtime.memory.embeddings import EmbeddingProfile, load_embedding_pro
 from agent_runtime.registry.skill_registry import ManifestBase
 
 
-def resolve_manifest_llm_profile(
+def resolve_manifest_worker_profile(
     manifest: ManifestBase,
     *,
     model_profiles: dict[str, ModelProfile] | None = None,
-    default_role: str = "orchestrator",
+    model_role: str | None = None,
     api_key: str | None = None,
     max_tokens: int | None = None,
 ) -> ModelProfile:
-    """Resolve a manifest-local LLM declaration against runtime model roles."""
-    role = manifest.model.llm_role or default_role
+    """Resolve a worker manifest's execution.model_role into a concrete LLM profile."""
+    role = model_role or manifest.execution.model_role
     base = resolve_model_role_profile(role, model_profiles=model_profiles)
     return ModelProfile(
         role=role,
@@ -25,6 +25,7 @@ def resolve_manifest_llm_profile(
         api_key=api_key or base.api_key,
         max_tokens=max_tokens or base.max_tokens,
         context_window=base.context_window,
+        extra_body={**base.extra_body, **manifest.model.extra_body},
     )
 
 

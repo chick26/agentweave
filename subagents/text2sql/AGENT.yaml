@@ -2,11 +2,10 @@ name: text2sql
 description: 使用自然语言查询结构化数据，生成并执行只读 SQL。
 execution:
   mode: worker
+  model_role: orchestrator
   max_turns: 8
 extension:
   module: subagents.text2sql.extension
-model:
-  llm_role: executor
 memory:
   namespaces:
     - project
@@ -17,3 +16,6 @@ routing_hints:
   - 数据库查询、SQL、结构化数据
   - IDC 资源、机房、机柜、服务器
   - 海缆故障、维修、影响城市
+suggested_questions:
+  - text: 查询最近一周结构化数据中的关键指标
+    reason: 结构化数据查询

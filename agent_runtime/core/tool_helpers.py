@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_runtime.core.context import RunContext
+from agent_runtime.core.context import RuntimeContext
 from agent_runtime.core.events import EventKind
 from agent_runtime.core.tool_protocol import ToolOutput
 
 
 def emit_tool_start(
-    run_ctx: RunContext,
+    run_ctx: RuntimeContext,
     *,
     tool_name: str,
     input_payload: dict[str, Any],
@@ -30,7 +30,7 @@ def emit_tool_start(
 
 
 def emit_tool_finish(
-    run_ctx: RunContext,
+    run_ctx: RuntimeContext,
     *,
     tool_name: str,
     tool_output: ToolOutput,

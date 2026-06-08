@@ -127,9 +127,15 @@ def test_context_compressor_soft_summary(tmp_path, monkeypatch):
 
 
 def test_context_compressor_micro_compacts_long_content():
-    messages = [{"role": "tool", "content": "x" * 5000}]
+    messages = [{"role": "assistant", "content": "x" * 5000}]
 
     compacted = micro_compact(messages)
 
     assert len(compacted[0]["content"]) < 2000
     assert "内容已微压缩" in compacted[0]["content"]
+
+
+def test_context_compressor_does_not_micro_compact_tool_content():
+    messages = [{"role": "tool", "content": "x" * 5000}]
+
+    assert micro_compact(messages) == messages
