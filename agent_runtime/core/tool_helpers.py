@@ -6,11 +6,26 @@ the emit_tool_start / emit_tool_finish boilerplate.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from agent_runtime.core.context import RuntimeContext
 from agent_runtime.core.events import EventKind
-from agent_runtime.core.tool_protocol import ToolOutput
+from agent_runtime.core.runtime_utils import json_dumps
+
+
+@dataclass(frozen=True)
+class ToolOutput:
+    """Dual-channel tool output for model and UI/event consumers."""
+
+    llm_content: Any
+    ui_content: Any = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_llm_json(self) -> str:
+        if isinstance(self.llm_content, str):
+            return self.llm_content
+        return json_dumps(self.llm_content)
 
 
 def emit_tool_start(

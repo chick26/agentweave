@@ -13,6 +13,12 @@
 - [Text2SQL 子智能体](architecture/05-text2sql-subagent.md)
 - [Todo 工作记忆](architecture/06-todo.md)
 
+## 环境准备
+
+- [环境准备总览](environment/README.md)
+- [Text2SQL 环境](environment/text2sql.md)
+- [RAG 环境](environment/rag.md)
+
 ## 对外接口与前端接入
 
 - [HTTP/SSE API 契约](api/http-sse-contract.md)
@@ -23,3 +29,5 @@
 ## 迭代记录
 
 - [FastAPI 与 SSE API 设计过程](iterations/04-fastapi-sse-api-design.md)
+- [Subagent Extension 协议重构](iterations/05-subagent-extension-refactor.md)
+- [Subagent 边界清理与文档治理](iterations/06-subagent-boundary-cleanup.md)

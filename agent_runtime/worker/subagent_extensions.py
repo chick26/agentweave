@@ -13,13 +13,15 @@ from agents import function_tool
 from agents.tool import FunctionTool
 
 from agent_runtime.core.context import RuntimeContext
+from agent_runtime.core.result_formatters import ResultFormatter, ResultFormatterRegistry
 from agent_runtime.core.tool_helpers import emit_tool_finish, emit_tool_start
-from agent_runtime.core.tool_protocol import ToolOutput
+from agent_runtime.core.tool_helpers import ToolOutput
 from agent_runtime.registry.skill_registry import AgentManifest
 
 
 PromptContextFn = Callable[[AgentManifest], dict[str, Any] | None]
 ValidateEnvironmentFn = Callable[[AgentManifest], None]
+CapabilityResolverFn = Callable[[AgentManifest], dict[str, Any] | None]
 
 
 @dataclass
@@ -28,6 +30,8 @@ class SubagentExtension:
     tools: list[Any] = field(default_factory=list)
     validators: list[ValidateEnvironmentFn] = field(default_factory=list)
     prompt_contexts: list[PromptContextFn] = field(default_factory=list)
+    result_formatters: list[ResultFormatter] = field(default_factory=list)
+    capability_resolvers: list[CapabilityResolverFn] = field(default_factory=list)
 
 
 class SubagentExtensionAPI:
@@ -38,6 +42,8 @@ class SubagentExtensionAPI:
         self._tools: list[Any] = []
         self._validators: list[ValidateEnvironmentFn] = []
         self._prompt_contexts: list[PromptContextFn] = []
+        self._result_formatters: list[ResultFormatter] = []
+        self._capability_resolvers: list[CapabilityResolverFn] = []
 
     def tool(
         self,
@@ -79,12 +85,26 @@ class SubagentExtensionAPI:
             raise TypeError("prompt_context expects a callable.")
         self._prompt_contexts.append(fn)
 
+    def result_formatter(self, formatter: ResultFormatter) -> None:
+        if not getattr(formatter, "artifact_type", ""):
+            raise ValueError("result_formatter expects formatter.artifact_type.")
+        if not callable(getattr(formatter, "format", None)):
+            raise TypeError("result_formatter expects a formatter with format(payload).")
+        self._result_formatters.append(formatter)
+
+    def capability_resolver(self, fn: CapabilityResolverFn) -> None:
+        if not callable(fn):
+            raise TypeError("capability_resolver expects a callable.")
+        self._capability_resolvers.append(fn)
+
     def build(self, *, module_name: str) -> SubagentExtension:
         return SubagentExtension(
             module_name=module_name,
             tools=list(self._tools),
             validators=list(self._validators),
             prompt_contexts=list(self._prompt_contexts),
+            result_formatters=list(self._result_formatters),
+            capability_resolvers=list(self._capability_resolvers),
         )
 
 
@@ -138,6 +158,30 @@ def build_extension_prompt_context(manifest: AgentManifest) -> dict[str, Any]:
         if isinstance(payload, dict):
             context.update(payload)
     return context
+
+
+def register_extension_result_formatters(
+    manifests: list[AgentManifest],
+    registry: ResultFormatterRegistry,
+) -> None:
+    for manifest in manifests:
+        extension = load_subagent_extension(manifest)
+        if extension is None:
+            continue
+        for formatter in extension.result_formatters:
+            registry.register(formatter)
+
+
+def resolve_extension_capabilities(manifest: AgentManifest) -> dict[str, Any]:
+    extension = load_subagent_extension(manifest)
+    if extension is None:
+        return {}
+    payload: dict[str, Any] = {}
+    for fn in extension.capability_resolvers:
+        resolved = fn(manifest)
+        if isinstance(resolved, dict):
+            payload.update(resolved)
+    return payload
 
 
 def validate_extension_environment(manifest: AgentManifest) -> None:

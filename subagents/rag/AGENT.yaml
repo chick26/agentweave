@@ -2,13 +2,26 @@ name: rag
 description: 基于 Markdown 知识库回答问题，返回带来源的检索片段。
 execution:
   mode: worker
-  model_role: orchestrator
   max_turns: 6
   timeout_seconds: 90
 extension:
   module: subagents.rag.extension
-model:
-  embedding_role: embedding
+capabilities:
+  - rag.search
+policies:
+  rag:
+    max_top_k: 10
+    require_source_metadata: true
+  subagent:
+    allow_recursive_calls: false
+output_contract:
+  format: json
+  required_fields:
+    - answer
+    - artifacts
+    - trace
+  artifact_types:
+    - rag_chunks
 memory:
   namespaces:
     - project

@@ -15,7 +15,7 @@
 
 ## 核心数据结构：AgentRuntime
 
-整个编排器运行时由 `agent_runtime/core/orchestrator.py` 中的 `AgentRuntime` 类驱动。
+整个编排器运行时由 `agent_runtime/core/runtime.py` 中的 `AgentRuntime` 类驱动。
 
 当启动应用时，这个类会将所有子系统连接在一起。当前实现的构造入口仍保持直接参数形态，核心依赖包括：
 
@@ -27,11 +27,7 @@ class AgentRuntime:
         model_name: str,
         api_key: str,
         session_db_path: Path,
-        tables: dict[str, Path | str] | None = None,
-        backend: DatabaseBackend | None = None,
         max_tokens: int = 4096,
-        sql_base_url: str | None = None,
-        sql_model_name: str | None = None,
         embedding_base_url: str | None = None,
         embedding_model_name: str | None = None,
         memory_enabled: bool | None = None,
@@ -40,8 +36,7 @@ class AgentRuntime:
         self.session_db_path = session_db_path
         
         # 挂载各个核心组件
-        self.backend = backend or CsvSQLiteBackend(tables)
-        self.model_profiles = build_model_profiles(...)
+        self.model_profile = load_model_profile(...)
         
         self.skill_registry = SkillRegistry(skills_root=self.root / "skills")
         self.agent_registry = AgentRegistry(subagents_root=self.root / "subagents")
@@ -145,10 +140,9 @@ SYSTEM_PROMPT = """\
 # 工具使用
 
 <tool_policy>
-1. **get_current_time** — 解析相对时间。
-2. **Subagent tools** — 根据下方 subagents_routing 选择... task 必须自包含。
-3. **load_skill** — 根据下方 skills_catalog 加载方法卡。
-4. **update_todo** — 对多步骤任务跟踪进度。
+1. **Subagent tools** — 根据下方 subagents_routing 选择... task 必须自包含，并带上已注入的当前时间。
+2. **load_skill** — 根据下方 skills_catalog 加载方法卡。
+3. **update_todo** — 对多步骤任务跟踪进度。
 {memory_tool_policy}
 </tool_policy>
 
@@ -170,7 +164,7 @@ SYSTEM_PROMPT = """\
 
 Orchestrator 手里的工具分为两类：
 
-1. **内建工具**：`get_current_time`, `memory_search`, `memory_write`, `load_skill`, `update_todo`。
+1. **内建工具**：`memory_search`, `memory_write`, `load_skill`, `update_todo`。
 2. **动态 Worker 工具**：通过扫描 `subagents/` 目录，把里面的独立 Agent 包装成当前 Orchestrator 可调用的一个函数工具。
 
 ## 意图路由

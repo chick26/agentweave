@@ -22,13 +22,18 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from agent_runtime.core.context import RuntimeContext
 from agent_runtime.core.events import EventKind
-from agent_runtime.core.manifest_models import resolve_manifest_worker_profile
 from agent_runtime.worker.subagent_extensions import (
     build_extension_prompt_context,
     build_extension_tools,
 )
 from agent_runtime.memory.memory_manager import MemoryManager
-from agent_runtime.core.runtime_utils import build_model, json_dumps, make_async_client, to_jsonable
+from agent_runtime.core.runtime_utils import (
+    build_model,
+    get_current_time_payload,
+    json_dumps,
+    make_async_client,
+    to_jsonable,
+)
 from agent_runtime.registry.skill_registry import AgentManifest, AgentRegistry, SkillRegistry
 
 # Plan/execute workers normally need two tool calls plus final output.
@@ -109,17 +114,7 @@ class SubagentRunner:
                 error=f"Unsupported execution mode: {manifest.execution.mode}",
             )
 
-        model_role = self.resolve_model_role(manifest)
-        if not model_role:
-            return SubagentResult(
-                answer=f"Subagent `{subagent_name}` is missing execution.model_role.",
-                subagent=subagent_name,
-                error="Missing model role",
-            )
-        profile = self.resolve_worker_profile(
-            manifest,
-            model_profiles=orchestrator_context.model_profiles,
-        )
+        profile = orchestrator_context.model_profile
         max_turns = self._resolve_max_turns(manifest)
         timeout_seconds = self._resolve_timeout_seconds(manifest)
         run_id = f"{subagent_name}-{uuid.uuid4().hex}"
@@ -127,7 +122,6 @@ class SubagentRunner:
             "stage": "worker_start",
             "skill": subagent_name,
             "subagent": subagent_name,
-            "model_role": model_role,
             "model": profile.model_name,
             "max_turns": max_turns,
             "timeout_seconds": timeout_seconds,
@@ -162,6 +156,7 @@ class SubagentRunner:
             manifest=manifest,
             profile=profile,
             prompt_query=task,
+            timezone_name=orchestrator_context.timezone_name,
             memory_events=memory_events,
             log_callback=log_callback,
         )
@@ -221,6 +216,7 @@ class SubagentRunner:
         manifest: AgentManifest,
         profile: Any,
         prompt_query: str = "",
+        timezone_name: str = "Asia/Hong_Kong",
         memory_events: list[dict[str, Any]] | None = None,
         log_callback: Any | None = None,
     ) -> Agent[RuntimeContext]:
@@ -242,6 +238,7 @@ class SubagentRunner:
             instructions=self._build_worker_prompt(
                 manifest,
                 query=prompt_query,
+                timezone_name=timezone_name,
                 memory_events=memory_events,
             ),
             model=model,
@@ -294,24 +291,6 @@ class SubagentRunner:
         tool.on_invoke_tool = invoke_tool
         return tool
 
-    def resolve_model_role(self, manifest: AgentManifest) -> str:
-        return os.getenv(
-            f"{_subagent_env_prefix(manifest.name)}_MODEL_ROLE",
-            manifest.execution.model_role,
-        )
-
-    def resolve_worker_profile(
-        self,
-        manifest: AgentManifest,
-        *,
-        model_profiles: dict[str, Any],
-    ) -> Any:
-        return resolve_manifest_worker_profile(
-            manifest,
-            model_profiles=model_profiles,
-            model_role=self.resolve_model_role(manifest),
-        )
-
     def _get_extra_body(self, manifest: AgentManifest, profile: Any) -> dict[str, Any]:
         return getattr(profile, "extra_body", {}) or {}
 
@@ -340,10 +319,12 @@ class SubagentRunner:
         manifest: AgentManifest,
         *,
         query: str = "",
+        timezone_name: str = "Asia/Hong_Kong",
         memory_events: list[dict[str, Any]] | None = None,
     ) -> str:
         template = manifest.body.strip() or manifest.description
         context = {
+            "current_time": json_dumps(get_current_time_payload(timezone_name)),
             "memory": self.memory_manager.build_skill_context(
                 manifest,
                 query=query,

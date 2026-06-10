@@ -14,10 +14,11 @@ __pycache__/
 data/*
 !data/.gitkeep
 !data/README.md
+!data/examples/
+!data/examples/**
 
 subagents/*/data/*
 !subagents/*/data/.gitkeep
-!subagents/*/data/README.md
 
 docs/iterations/
 !docs/iterations/

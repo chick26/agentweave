@@ -3,24 +3,31 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any, Callable, TypeAlias, TypeVar
 
 from agents import RunContextWrapper, function_tool
 
 from agent_runtime.core.context import RuntimeContext
 from agent_runtime.core.events import EventKind
+from agent_runtime.core.result_formatters import (
+    ResultArtifactSpec,
+    ResultFormatter,
+    ResultFormatterRegistry,
+)
 from agent_runtime.core.runtime_utils import call_chat_model, make_async_client
 from agent_runtime.core.tool_helpers import emit_tool_finish as _emit_tool_finish
 from agent_runtime.core.tool_helpers import emit_tool_start as _emit_tool_start
-from agent_runtime.core.tool_protocol import ToolOutput
+from agent_runtime.core.tool_helpers import ToolOutput
 from agent_runtime.shared.embeddings import EmbeddingClient, EmbeddingProfile
 from agent_runtime.shared.manifest import AgentManifest
 from agent_runtime.shared.models import ModelProfile, resolve_manifest_embedding_profile
 from agent_runtime.worker.subagent_extensions import SubagentExtensionAPI
+from agent_runtime.worker.subagent_extensions import load_subagent_extension
 
 
 SubagentToolContext: TypeAlias = RunContextWrapper[Any]
 tool = function_tool
+T = TypeVar("T")
 
 
 class SubagentContext:
@@ -45,12 +52,33 @@ class SubagentContext:
     def cache(self) -> dict[str, Any]:
         return self._ctx.state
 
+    def typed_state(self, namespace: str, factory: Callable[[], T]) -> T:
+        return self._ctx.get_typed_state(namespace, factory)
+
     @property
     def manifest(self) -> AgentManifest:
         registry = self._ctx.agent_registry
         if registry is None:
             raise RuntimeError("Subagent manifest registry is unavailable.")
         return registry.get(self._ctx.active_subagent)
+
+    @property
+    def capabilities(self) -> list[str]:
+        return list(self.manifest.capabilities)
+
+    @property
+    def policies(self) -> dict[str, Any]:
+        return dict(self.manifest.policies)
+
+    @property
+    def output_contract(self) -> dict[str, Any]:
+        contract = self.manifest.output_contract
+        return {
+            "format": contract.format,
+            "required_fields": list(contract.required_fields),
+            "artifact_types": list(contract.artifact_types),
+            **dict(contract.metadata),
+        }
 
     def trace(
         self,
@@ -84,22 +112,18 @@ class SubagentContext:
             status=status,
         )
 
-    def model_profile(self, role: str) -> ModelProfile:
-        try:
-            return self._ctx.model_profiles[role]
-        except KeyError as exc:
-            raise ValueError(f"Unknown model role: {role}") from exc
+    def model_profile(self) -> ModelProfile:
+        return self._ctx.model_profile
 
     async def call_model(
         self,
         *,
-        role: str,
         messages: list[dict[str, Any]],
         title: str,
         kind: str,
         max_tokens: int | None = None,
     ) -> str:
-        profile = self.model_profile(role)
+        profile = self.model_profile()
         return await call_chat_model(
             client=make_async_client(profile),
             model_name=profile.model_name,
@@ -121,7 +145,6 @@ class SubagentContext:
     def embedding_profile(self, manifest: AgentManifest | None = None) -> EmbeddingProfile:
         return resolve_manifest_embedding_profile(
             manifest or self.manifest,
-            model_profiles=self._ctx.model_profiles,
         )
 
     def store_result(
@@ -151,12 +174,56 @@ class SubagentContext:
             )
         return result_id
 
+    def store_artifact(
+        self,
+        *,
+        artifact_type: str,
+        payload: dict[str, Any],
+        tool_name: str = "",
+        source: str = "",
+    ) -> dict[str, Any]:
+        result_store = self._ctx.result_store
+        if result_store is None:
+            return {}
+        registry = self._ctx.result_formatters
+        if registry is None:
+            registry = ResultFormatterRegistry()
+            try:
+                extension = load_subagent_extension(self.manifest)
+            except Exception:
+                extension = None
+            if extension is not None:
+                for formatter in extension.result_formatters:
+                    registry.register(formatter)
+        formatter_payload = {
+            **dict(payload),
+            "artifact_type": artifact_type,
+            "tool_name": tool_name,
+            "source": source or tool_name or self._ctx.active_subagent,
+            "subagent": self._ctx.active_subagent,
+        }
+        artifact = registry.format(artifact_type, formatter_payload)
+        result_id = result_store.create_artifact(
+            run_id=self._ctx.run_id,
+            artifact=artifact,
+        )
+        result = result_store.get_metadata(result_id)
+        if tool_name:
+            self.result_created(
+                tool_name=tool_name,
+                ui_content=result,
+                metadata=result.get("metadata", {}),
+                result=result,
+            )
+        return result
+
     def result_created(
         self,
         *,
         tool_name: str,
         ui_content: dict[str, Any],
         metadata: dict[str, Any],
+        result: dict[str, Any] | None = None,
     ) -> None:
         self._ctx.emit_payload(
             kind=EventKind.RESULT_CREATED,
@@ -165,6 +232,7 @@ class SubagentContext:
                 "tool_name": tool_name,
                 "ui_content": ui_content,
                 "metadata": metadata,
+                "result": result or ui_content,
             },
         )
 
@@ -217,6 +285,8 @@ __all__ = [
     "SubagentContext",
     "SubagentExtensionAPI",
     "SubagentToolContext",
+    "ResultArtifactSpec",
+    "ResultFormatter",
     "ToolOutput",
     "subagent_context",
     "tool",

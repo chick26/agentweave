@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 from typing import Any
 
@@ -22,6 +21,8 @@ async def generate_sql(
     schema_text: str,
     selected_columns: list[str],
     linked_values: list[dict[str, Any]],
+    dialect: str,
+    require_schema_validation: bool,
     constraints: str = "",
 ) -> dict[str, str]:
     payload = {
@@ -37,7 +38,7 @@ async def generate_sql(
     messages = [
         {
             "role": "system",
-            "content": SQL_GENERATION_PROMPT.format(dialect=_require_backend_dialect(ctx)),
+            "content": SQL_GENERATION_PROMPT.format(dialect=dialect or "SQL"),
         },
         {
             "role": "user",
@@ -55,7 +56,6 @@ async def generate_sql(
         output=None,
     )
     raw_output = await ctx.call_model(
-        role="executor",
         messages=messages,
         title="SQL 生成模型调用",
         kind="sql_model",
@@ -72,7 +72,7 @@ async def generate_sql(
         validate_readonly_sql(sql)
     except ValueError as exc:
         validation_errors.append(str(exc))
-    if _strict_schema_validation_enabled():
+    if require_schema_validation:
         try:
             validate_sql_uses_selected_schema(
                 sql,
@@ -93,11 +93,6 @@ async def generate_sql(
         "raw_output": raw_output,
         "validation_error": validation_error,
     }
-
-
-def _require_backend_dialect(ctx: SubagentContext) -> str:
-    backend = ctx.cache.get("database_backend")
-    return str(getattr(backend, "dialect", "SQL"))
 
 
 def extract_sql(content: str) -> str:
@@ -139,12 +134,3 @@ def _normalize_sql_statement(sql: str) -> str:
             continue
         kept.append(clean)
     return " ".join(kept)
-
-
-def _strict_schema_validation_enabled() -> bool:
-    return os.getenv("TEXT2SQL_STRICT_SCHEMA_VALIDATION", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }

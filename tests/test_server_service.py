@@ -222,7 +222,8 @@ def test_service_result_page_and_csv_export(tmp_path: Path) -> None:
 
     assert page["result_id"] == result_id
     assert page["rows"] == [{"count": 1}]
-    assert page["has_more"] is True
+    assert page["page"]["has_more"] is True
+    assert page["metrics"]["stored_count"] == 2
     assert "count" in csv_data.decode("utf-8-sig")
 
 
@@ -266,12 +267,12 @@ def test_service_prunes_completed_runs_by_ttl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AGENTWEAVE_RUN_CACHE_MAX", "1000")
-    monkeypatch.setenv("AGENTWEAVE_RUN_CACHE_TTL_SECONDS", "0.001")
+    monkeypatch.setenv("AGENTWEAVE_RUN_CACHE_TTL_SECONDS", "1")
     service = _service(tmp_path)
 
     created = service.create_run(session_id="web-test", message="ttl")
     list(service.iter_sse_events(created["run_id"]))
-    service._runs[created["run_id"]].completed_monotonic = time.monotonic() - 10
+    service._runs[created["run_id"]].completed_monotonic = time.monotonic() - 2
     service.create_run(session_id="web-test", message="trigger prune")
 
     with pytest.raises(KeyError):

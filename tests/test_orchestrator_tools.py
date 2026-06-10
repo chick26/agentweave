@@ -9,9 +9,8 @@ import pytest
 from agents.tool_context import ToolContext
 
 from agent_runtime.core.context import RuntimeContext
-from agent_runtime.storage.database import CsvSQLiteBackend
 from agent_runtime.memory.todo_state import TodoItem
-from agent_runtime.core.orchestrator import AgentRuntime
+from agent_runtime.core.runtime import AgentRuntime
 from agent_runtime.core.prompts import SYSTEM_PROMPT
 
 
@@ -60,7 +59,6 @@ def test_runtime_readiness_checks_only_selected_bot_subagents(tmp_path, monkeypa
             f"description: {name} worker\n"
             "execution:\n"
             "  mode: worker\n"
-            "  model_role: orchestrator\n"
             "extension:\n"
             f"  module: subagents.{name}.extension\n",
             encoding="utf-8",
@@ -96,14 +94,11 @@ def test_orchestrator_exposes_only_runtime_tools():
         model_name="orchestrator",
         api_key="not-needed",
         session_db_path=Path("/tmp/test_orchestrator_tools.sqlite"),
-        sql_base_url="http://example.test/sql/v1",
-        sql_model_name="sql",
     )
 
     tool_names = {tool.name for tool in runtime._build_tools()}
 
     assert {
-        "get_current_time",
         "memory_search",
         "memory_write",
         "load_skill",
@@ -115,6 +110,7 @@ def test_orchestrator_exposes_only_runtime_tools():
     assert "generate_sql" not in tool_names
     assert "execute_sql" not in tool_names
     assert "update_todo" not in tool_names
+    assert "get_current_time" not in tool_names
 
     text2sql = next(tool for tool in runtime._build_tools() if tool.name == "text2sql")
     assert set(text2sql.params_json_schema["properties"]) == {"task"}
@@ -138,14 +134,58 @@ def test_todo_tool_is_opt_in(monkeypatch):
     assert "update_todo" in tool_names
 
 
+def test_memory_search_creates_memory_records_artifact(tmp_path):
+    runtime = AgentRuntime(
+        base_url="http://example.test/v1",
+        model_name="orchestrator",
+        api_key="not-needed",
+        session_db_path=tmp_path / "sessions.sqlite",
+        memory_enabled=True,
+    )
+    runtime.memory_manager.write(
+        namespace="project",
+        key="timezone",
+        content="Use Asia/Hong_Kong for runtime examples.",
+        tags=["time"],
+    )
+    tool = next(tool for tool in runtime._build_tools() if tool.name == "memory_search")
+    context = RuntimeContext(
+        run_id="memory-run",
+        session_id="memory-session",
+        model_profile=runtime.model_profile,
+        result_store=runtime.result_store,
+        result_formatters=runtime.result_formatters,
+    )
+
+    output = asyncio.run(
+        tool.on_invoke_tool(
+            ToolContext(
+                context=context,
+                tool_name="memory_search",
+                tool_call_id="call_memory",
+                tool_arguments=json.dumps(
+                    {"query": "", "namespaces": "project", "limit": 5}
+                ),
+            ),
+            json.dumps({"query": "", "namespaces": "project", "limit": 5}),
+        )
+    )
+    records = json.loads(output)
+    result_events = [event for event in context.events if event["kind"] == "result_created"]
+
+    assert records[0]["key"] == "timezone"
+    assert result_events
+    result = result_events[0]["payload"]["result"]
+    assert result["artifact_type"] == "memory_records"
+    assert runtime.result_store.get_page(result["result_id"], offset=0, limit=10)[0]["key"] == "timezone"
+
+
 def test_orchestrator_hides_memory_surface_when_disabled(tmp_path):
     runtime = AgentRuntime(
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
-        sql_base_url="http://example.test/sql/v1",
-        sql_model_name="sql",
         memory_enabled=False,
     )
     runtime.memory_store.write("project", "metric_rule", "不要注入这条记忆。")
@@ -160,33 +200,19 @@ def test_orchestrator_hides_memory_surface_when_disabled(tmp_path):
     assert "不要注入这条记忆。" not in instructions
 
 
-def test_runtime_tools_are_not_wrapped_by_tool_hooks(tmp_path):
+def test_runtime_injects_current_time_without_time_tool(tmp_path):
     runtime = AgentRuntime(
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
     )
-    tool = next(tool for tool in runtime._build_tools() if tool.name == "get_current_time")
-    context = RuntimeContext(
-        run_id="abc",
-        session_id="abc",
-        model_profiles=runtime.model_profiles,
-    )
 
-    asyncio.run(
-        tool.on_invoke_tool(
-            ToolContext(
-                context=context,
-                tool_name="get_current_time",
-                tool_call_id="call_1",
-                tool_arguments=json.dumps({"timezone_name": ""}),
-            ),
-            json.dumps({"timezone_name": ""}),
-        )
-    )
+    instructions = runtime._build_instructions("abc")
 
-    assert context.events[-1]["payload"]["status"] == "completed"
+    assert "get_current_time" not in {tool.name for tool in runtime._build_tools()}
+    assert "<current_time>" in instructions
+    assert '"timezone": "Asia/Hong_Kong"' in instructions
 
 
 def test_runtime_clear_memory_clears_persisted_memory(tmp_path):
@@ -195,8 +221,6 @@ def test_runtime_clear_memory_clears_persisted_memory(tmp_path):
         model_name="orchestrator",
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
-        sql_base_url="http://example.test/sql/v1",
-        sql_model_name="sql",
     )
     memory_id = runtime.memory_store.write("project", "metric_rule", "按柜数统计。")
     runtime.memory_store.upsert_vector(
@@ -214,20 +238,11 @@ def test_runtime_clear_memory_clears_persisted_memory(tmp_path):
 
 
 def test_skill_agent_tool_invocation_creates_isolated_worker_contexts(tmp_path, monkeypatch):
-    csv_path = tmp_path / "resources.csv"
-    csv_path.write_text(
-        "machine_room,cabinet_business_status\n"
-        "403,Available\n",
-        encoding="utf-8",
-    )
-    backend = CsvSQLiteBackend({"resources": csv_path})
     runtime = AgentRuntime(
         base_url="http://example.test/v1",
         model_name="orchestrator",
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
-        sql_base_url="http://example.test/sql/v1",
-        sql_model_name="sql",
     )
     captured = {"contexts": [], "sessions": [], "inputs": []}
 
@@ -254,9 +269,8 @@ def test_skill_agent_tool_invocation_creates_isolated_worker_contexts(tmp_path, 
     orchestrator_context = RuntimeContext(
         run_id="abc",
         session_id="abc",
-        model_profiles=runtime.model_profiles,
+        model_profile=runtime.model_profile,
         result_store=runtime.result_store,
-        state={"database_backend": backend},
     )
 
     first_output = asyncio.run(
@@ -307,14 +321,12 @@ def test_load_skill_returns_skill_body(tmp_path):
         model_name="orchestrator",
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
-        sql_base_url="http://example.test/sql/v1",
-        sql_model_name="sql",
     )
     tool = next(tool for tool in runtime._build_tools() if tool.name == "load_skill")
     orchestrator_context = RuntimeContext(
         run_id="abc",
         session_id="abc",
-        model_profiles=runtime.model_profiles,
+        model_profile=runtime.model_profile,
         result_store=runtime.result_store,
     )
 
@@ -354,7 +366,7 @@ def test_prompt_no_hardcoded_skills():
 
 def test_prompt_keeps_delegation_compact():
     assert "任务描述必须自包含" in SYSTEM_PROMPT
-    assert "只传递用户原文和你已确认的事实" in SYSTEM_PROMPT
+    assert "只传递用户原文、注入的当前时间和你已确认的事实" in SYSTEM_PROMPT
     assert "专业查询或数据处理默认委派" in SYSTEM_PROMPT
     assert "不能看到或调用 subagent 的内部工具" not in SYSTEM_PROMPT
     assert "<subagent_delegation>" not in SYSTEM_PROMPT
@@ -366,8 +378,6 @@ def test_memory_injection(tmp_path):
         model_name="orchestrator",
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
-        sql_base_url="http://example.test/sql/v1",
-        sql_model_name="sql",
     )
     runtime.memory_manager.write("project", "metric_rule", "可用资源默认按柜数统计。")
     runtime.memory_manager.write(
@@ -392,8 +402,6 @@ def test_todo_context_injected_into_instructions(tmp_path):
         model_name="orchestrator",
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
-        sql_base_url="http://example.test/sql/v1",
-        sql_model_name="sql",
     )
     runtime.todo_state.update(
         "abc",
@@ -414,8 +422,6 @@ def test_skills_section_includes_execution_mode():
         model_name="orchestrator",
         api_key="not-needed",
         session_db_path=Path("/tmp/test_orchestrator_tools_skills.sqlite"),
-        sql_base_url="http://example.test/sql/v1",
-        sql_model_name="sql",
     )
     skills_section = runtime._build_skills_section()
     assert "<subagents_routing>" in skills_section
@@ -441,8 +447,7 @@ def test_runtime_scopes_tools_prompt_and_load_skill_by_bot(tmp_path):
             f"name: {name}\n"
             f"description: {name}\n"
             "execution:\n"
-            "  mode: worker\n"
-            "  model_role: orchestrator\n",
+            "  mode: worker\n",
             encoding="utf-8",
         )
         (subagent_dir / "prompt.md").write_text(f"{name} prompt", encoding="utf-8")
@@ -482,7 +487,7 @@ def test_runtime_scopes_tools_prompt_and_load_skill_by_bot(tmp_path):
     context = RuntimeContext(
         run_id="abc",
         session_id="abc",
-        model_profiles=runtime.model_profiles,
+        model_profile=runtime.model_profile,
     )
     output = asyncio.run(
         load_skill.on_invoke_tool(
@@ -507,8 +512,6 @@ def test_runtime_ask_without_model_delta_uses_non_streaming_runner(tmp_path, mon
         model_name="orchestrator",
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
-        sql_base_url="http://example.test/sql/v1",
-        sql_model_name="sql",
     )
     calls = {"run": 0, "run_streamed": 0}
 
@@ -523,8 +526,8 @@ def test_runtime_ask_without_model_delta_uses_non_streaming_runner(tmp_path, mon
         calls["run_streamed"] += 1
         raise AssertionError("run_streamed should not be used")
 
-    monkeypatch.setattr("agent_runtime.core.run_executor.Runner.run", fake_run)
-    monkeypatch.setattr("agent_runtime.core.run_executor.Runner.run_streamed", fake_run_streamed)
+    monkeypatch.setattr("agent_runtime.core.runtime.Runner.run", fake_run)
+    monkeypatch.setattr("agent_runtime.core.runtime.Runner.run_streamed", fake_run_streamed)
 
     result = asyncio.run(runtime.ask("hello", "session-plain"))
 
@@ -538,8 +541,6 @@ def test_runtime_ask_streams_only_output_text_delta(tmp_path, monkeypatch):
         model_name="orchestrator",
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
-        sql_base_url="http://example.test/sql/v1",
-        sql_model_name="sql",
     )
     deltas: list[str] = []
 
@@ -571,8 +572,8 @@ def test_runtime_ask_streams_only_output_text_delta(tmp_path, monkeypatch):
     def fake_run_streamed(*args, **kwargs):
         return FakeStreamedResult()
 
-    monkeypatch.setattr("agent_runtime.core.run_executor.Runner.run", fake_run)
-    monkeypatch.setattr("agent_runtime.core.run_executor.Runner.run_streamed", fake_run_streamed)
+    monkeypatch.setattr("agent_runtime.core.runtime.Runner.run", fake_run)
+    monkeypatch.setattr("agent_runtime.core.runtime.Runner.run_streamed", fake_run_streamed)
 
     result = asyncio.run(
         runtime.ask(

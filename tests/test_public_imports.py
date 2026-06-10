@@ -43,6 +43,7 @@ def test_new_layered_public_paths_are_available() -> None:
     from agent_runtime.core.context import RuntimeContext
     from agent_runtime.core.hooks import HookRunner
     from agent_runtime.core.result_events import extract_result_metadata
+    from agent_runtime.core.result_formatters import ResultArtifactSpec, ResultFormatterRegistry
     from agent_runtime.hooks.session_start import SessionStartContext
     from agent_runtime.memory.memory_manager import MemoryManager
     from agent_runtime.registry.skill_registry import AgentRegistry
@@ -54,6 +55,8 @@ def test_new_layered_public_paths_are_available() -> None:
     assert HookRunner.__name__ == "HookRunner"
     assert SessionStartContext.__name__ == "SessionStartContext"
     assert extract_result_metadata.__name__ == "extract_result_metadata"
+    assert ResultArtifactSpec.__name__ == "ResultArtifactSpec"
+    assert ResultFormatterRegistry.__name__ == "ResultFormatterRegistry"
     assert SubagentRunner.__name__ == "SubagentRunner"
     assert CsvSQLiteBackend.__name__ == "CsvSQLiteBackend"
     assert MemoryManager.__name__ == "MemoryManager"
@@ -66,6 +69,7 @@ def test_subagent_api_public_surface_is_available() -> None:
         SubagentContext,
         SubagentExtensionAPI,
         SubagentToolContext,
+        ResultArtifactSpec,
         ToolOutput,
         subagent_context,
         tool,
@@ -74,6 +78,7 @@ def test_subagent_api_public_surface_is_available() -> None:
     assert SubagentContext.__name__ == "SubagentContext"
     assert SubagentExtensionAPI.__name__ == "SubagentExtensionAPI"
     assert SubagentToolContext is not None
+    assert ResultArtifactSpec.__name__ == "ResultArtifactSpec"
     assert ToolOutput.__name__ == "ToolOutput"
     assert callable(subagent_context)
     assert callable(tool)

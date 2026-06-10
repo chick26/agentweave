@@ -14,8 +14,8 @@ from agent_runtime.shared.common import load_local_env_files
 from agent_runtime.shared.embeddings import EmbeddingClient
 from agent_runtime.shared.manifest import load_subagent_manifest
 from agent_runtime.shared.models import (
+    load_model_profile,
     resolve_manifest_embedding_profile,
-    resolve_model_role_profile,
 )
 from subagents.rag.core.markdown_loader import load_markdown_documents
 from subagents.rag.core.retrieval import build_knowledge_index, write_knowledge_index
@@ -26,6 +26,7 @@ def prepare_rag_index(
     root: Path,
     output: Path,
     overwrite: bool = False,
+    source_root: Path | None = None,
     with_summary: bool = True,
     summary_callable: Callable[[str], str] | None = None,
 ) -> Path:
@@ -35,9 +36,9 @@ def prepare_rag_index(
     if output.exists() and not overwrite:
         return output
     manifest = load_subagent_manifest(root, "rag")
-    knowledge_paths = _knowledge_paths(runtime_root=root, manifest=manifest)
+    knowledge_paths = _knowledge_paths(runtime_root=root, source_root=source_root)
     if not knowledge_paths:
-        raise FileNotFoundError("No Markdown files found under RAG data roots.")
+        raise FileNotFoundError("No Markdown files found under the RAG source root.")
     documents = load_markdown_documents(knowledge_paths)
     if not documents:
         raise ValueError("No readable text found in RAG Markdown files.")
@@ -95,6 +96,11 @@ def main() -> None:
         action="store_true",
         help="Prepare the index without calling an LLM for summary fields.",
     )
+    parser.add_argument(
+        "--source-root",
+        default="data/examples/rag",
+        help="Directory containing Markdown files for local RAG index preparation.",
+    )
     args = parser.parse_args()
     root = Path(args.root).resolve()
     load_local_env_files(root)
@@ -103,6 +109,7 @@ def main() -> None:
         root=root,
         output=Path(args.output),
         overwrite=bool(args.overwrite),
+        source_root=Path(args.source_root),
         with_summary=not bool(args.no_summary),
     )
     print(f"prepared={output}")
@@ -120,22 +127,18 @@ def _embedding_client_from_manifest(manifest) -> EmbeddingClient:
     return EmbeddingClient(resolve_manifest_embedding_profile(manifest))
 
 
-def _knowledge_paths(*, runtime_root: Path, manifest) -> list[Path]:
-    roots = ["subagents/rag/data"]
-    globs = ["*.md"]
+def _knowledge_paths(*, runtime_root: Path, source_root: Path | None = None) -> list[Path]:
+    base = source_root or Path("data/examples/rag")
+    base = base.expanduser()
+    if not base.is_absolute():
+        base = runtime_root / base
     paths: list[Path] = []
-    for raw_root in roots:
-        base = Path(raw_root)
-        if not base.is_absolute():
-            base = runtime_root / base
-        for pattern in globs:
-            paths.extend(path for path in base.glob(pattern) if path.is_file())
+    paths.extend(path for path in base.glob("*.md") if path.is_file())
     return sorted(set(paths), key=lambda path: str(path))
 
 
 def _summary_callable_from_manifest(_manifest) -> Callable[[str], str]:
-    role = os.getenv("RAG_SUMMARY_MODEL_ROLE", "executor")
-    profile = resolve_model_role_profile(role)
+    profile = load_model_profile()
     api_key = os.getenv("RAG_SUMMARY_API_KEY") or profile.api_key
     client = OpenAI(
         base_url=profile.base_url,

@@ -99,12 +99,7 @@ class ResourceLoader:
         snapshot = self.discover()
         return {
             "subagents": [
-                {
-                    "name": item.name,
-                    "description": item.description,
-                    "routing_hints": list(item.routing_hints),
-                    "execution_mode": item.execution.mode,
-                }
+                _subagent_payload(item)
                 for item in snapshot.subagents
             ],
             "skills": [
@@ -133,11 +128,7 @@ class ResourceLoader:
             },
             "resolved": {
                 "subagents": [
-                    {
-                        "name": item.name,
-                        "description": item.description,
-                        "routing_hints": list(item.routing_hints),
-                    }
+                    _subagent_payload(item)
                     for name in bot.subagents
                     if (item := subagents_by_name.get(name)) is not None
                 ],
@@ -179,7 +170,7 @@ class ResourceLoader:
         override = os.getenv("AGENT_PROJECT_RULES_PATH", "").strip()
         if override:
             return [Path(override).expanduser()]
-        return [self.root / "AGENTS.md", self.root / "PROJECT.md"]
+        return [self.root / "AGENTS.md"]
 
 
 def _names_changed(before: list[str], after: list[str]) -> dict[str, Any]:
@@ -200,3 +191,20 @@ def _domain_files(signature: tuple[tuple[str, int, int], ...]) -> list[str]:
         for path, _mtime, _size in signature
         if path.endswith("/domain_catalog.yaml")
     )
+
+
+def _subagent_payload(item: AgentManifest) -> dict[str, Any]:
+    return {
+        "name": item.name,
+        "description": item.description,
+        "routing_hints": list(item.routing_hints),
+        "execution_mode": item.execution.mode,
+        "capabilities": list(item.capabilities),
+        "policies": dict(item.policies),
+        "output_contract": {
+            "format": item.output_contract.format,
+            "required_fields": list(item.output_contract.required_fields),
+            "artifact_types": list(item.output_contract.artifact_types),
+            **dict(item.output_contract.metadata),
+        },
+    }

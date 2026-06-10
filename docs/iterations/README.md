@@ -7,3 +7,12 @@
 - [基于 pi-agent 思路的 AgentWeave Runtime 分层重构](03-pi-agent-runtime-refactor.md)
 - [FastAPI 与 SSE API 设计过程](04-fastapi-sse-api-design.md)
 - [Subagent Extension 协议重构](05-subagent-extension-refactor.md)
+- [Subagent 边界清理与文档治理](06-subagent-boundary-cleanup.md)
+- [Text2SQL Typed State 与运行时清理](07-text2sql-state-and-runtime-cleanup.md)
+
+## 文档治理原则
+
+- 模块内 `README.md`：记录当前职责、边界、review 决策和行动项。
+- `docs/architecture/`：只描述当前稳定架构。
+- `docs/iterations/`：记录每轮优化的背景、取舍和迁移结果。
+- `docs/environment/`：记录项目级环境准备、数据来源和生成物。

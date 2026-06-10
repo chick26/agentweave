@@ -9,11 +9,13 @@ import pytest
 from agents.tool_context import ToolContext
 
 from agent_runtime.core.context import RuntimeContext
+from agent_runtime.core.model_profiles import ModelProfile
 from agent_runtime.registry.skill_registry import AgentRegistry
+from agent_runtime.storage.result_store import ResultStore
 from subagents.rag import extension as rag_tools
 from subagents.rag.core.markdown_loader import KnowledgeDocument
-from subagents.rag.prepare import index as prepare_index
-from subagents.rag.prepare.index import prepare_rag_index
+from agentweave_prepare import rag as prepare_index
+from agentweave_prepare.rag import prepare_rag_index
 from subagents.rag.core.retrieval import (
     build_knowledge_index,
     generate_kb_description,
@@ -33,6 +35,15 @@ class FakeEmbeddingClient:
         return vectors
 
 
+def _model_profile() -> ModelProfile:
+    return ModelProfile(
+        base_url="http://example.test/v1",
+        model_name="chat",
+        api_key="not-needed",
+        max_tokens=128,
+    )
+
+
 def test_rag_manifest_declares_local_markdown_data():
     registry = AgentRegistry(subagents_root=Path("subagents"))
     manifest = registry.get("rag")
@@ -41,16 +52,15 @@ def test_rag_manifest_declares_local_markdown_data():
     assert manifest.body.startswith("你是 RAG Knowledge Subagent")
     assert manifest.extension.module == "subagents.rag.extension"
     assert manifest.tools == []
-    assert manifest.execution.model_role == "orchestrator"
-    assert manifest.model.embedding_role == "embedding"
+    assert manifest.execution.mode == "worker"
 
 
-def test_rag_knowledge_paths_use_subagent_data_dir(tmp_path):
-    md_path = tmp_path / "subagents" / "rag" / "data" / "demo.md"
+def test_rag_knowledge_paths_use_project_examples_dir(tmp_path):
+    md_path = tmp_path / "data" / "examples" / "rag" / "demo.md"
     md_path.parent.mkdir(parents=True)
     md_path.write_text("# Demo\nknowledge", encoding="utf-8")
 
-    paths = prepare_index._knowledge_paths(runtime_root=tmp_path, manifest=SimpleNamespace())
+    paths = prepare_index._knowledge_paths(runtime_root=tmp_path)
 
     assert paths == [md_path]
 
@@ -246,7 +256,7 @@ def test_rag_tool_returns_clear_error_when_index_not_prepared(tmp_path, monkeypa
         run_id="rag-run",
         runtime_root=tmp_path,
         active_subagent="rag",
-        model_profiles={},
+        model_profile=_model_profile(),
         agent_registry=registry,
     )
 
@@ -299,12 +309,14 @@ def test_rag_tool_searches_prepared_index(tmp_path, monkeypatch):
         "agent_runtime.subagent_api.SubagentContext.embedding_client",
         lambda self: FakeEmbeddingClient(),
     )
+    result_store = ResultStore(tmp_path / "agent_results.sqlite")
     run_ctx = RuntimeContext(
         run_id="rag-index-run",
         runtime_root=tmp_path,
         active_subagent="rag",
-        model_profiles={},
+        model_profile=_model_profile(),
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
+        result_store=result_store,
     )
 
     output = asyncio.run(
@@ -321,8 +333,13 @@ def test_rag_tool_searches_prepared_index(tmp_path, monkeypatch):
     payload = json.loads(output)
 
     assert payload["count"] == 1
+    assert payload["result_id"].startswith("res_")
     assert payload["chunks"][0]["chunk_id"] == "knowledge.md#p1:c0"
     assert payload["chunks"][0]["match_method"] == "prepared_index"
+    metadata = result_store.get_metadata(payload["result_id"])
+    assert metadata["artifact_type"] == "rag_chunks"
+    assert metadata["metadata"]["query"] == "target"
+    assert result_store.get_page(payload["result_id"], offset=0, limit=10)[0]["chunk_id"] == "knowledge.md#p1:c0"
 
 
 def test_rag_summary_tool_returns_prepared_index_summary(tmp_path, monkeypatch):
@@ -357,7 +374,7 @@ def test_rag_summary_tool_returns_prepared_index_summary(tmp_path, monkeypatch):
         run_id="rag-summary-run",
         runtime_root=tmp_path,
         active_subagent="rag",
-        model_profiles={},
+        model_profile=_model_profile(),
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
     )
 
@@ -423,7 +440,7 @@ def test_rag_toolkit_emits_successful_search(tmp_path, monkeypatch):
         run_id="rag-success-run",
         runtime_root=Path("."),
         active_subagent="rag",
-        model_profiles={},
+        model_profile=_model_profile(),
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
     )
 

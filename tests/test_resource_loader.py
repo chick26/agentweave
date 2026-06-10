@@ -12,9 +12,8 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def test_resource_loader_prefers_agents_md_over_project_md(tmp_path, monkeypatch) -> None:
+def test_resource_loader_loads_agents_md_project_rules(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("AGENT_PROJECT_RULES_PATH", raising=False)
-    _write(tmp_path / "PROJECT.md", "project rules")
     _write(tmp_path / "AGENTS.md", "agents rules")
 
     loader = ResourceLoader(
@@ -27,6 +26,22 @@ def test_resource_loader_prefers_agents_md_over_project_md(tmp_path, monkeypatch
 
     assert rules == "agents rules"
     assert source.endswith("AGENTS.md")
+
+
+def test_resource_loader_ignores_legacy_project_md(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AGENT_PROJECT_RULES_PATH", raising=False)
+    _write(tmp_path / "PROJECT.md", "project rules")
+
+    loader = ResourceLoader(
+        root=tmp_path,
+        skill_registry=SkillRegistry(skills_root=tmp_path / "skills"),
+        agent_registry=AgentRegistry(subagents_root=tmp_path / "subagents"),
+    )
+
+    rules, source = loader.get_project_rules()
+
+    assert rules == ""
+    assert source == ""
 
 
 def test_resource_loader_reload_invalidates_registry_cache(tmp_path, monkeypatch) -> None:
@@ -62,7 +77,6 @@ def test_resource_loader_reload_invalidates_extension_cache(tmp_path, monkeypatc
         "description: Reload worker.\n"
         "execution:\n"
         "  mode: worker\n"
-        "  model_role: orchestrator\n"
         "extension:\n"
         "  module: subagents.reload_worker.extension\n",
     )
@@ -95,6 +109,30 @@ def test_resource_loader_reload_invalidates_extension_cache(tmp_path, monkeypatc
     loader.reload()
 
     assert runner._build_worker_prompt(agent_registry.get("reload_worker")) == "Context: v2"
+
+
+def test_resource_loader_does_not_track_project_example_data(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AGENT_PROJECT_RULES_PATH", raising=False)
+    subagent_dir = tmp_path / "subagents" / "text2sql"
+    _write(
+        subagent_dir / "AGENT.yaml",
+        "name: text2sql\n"
+        "description: Text2SQL.\n"
+        "execution:\n"
+        "  mode: worker\n",
+    )
+    _write(subagent_dir / "prompt.md", "Prompt")
+    _write(subagent_dir / "domain_catalog.yaml", "domains: []\n")
+    _write(tmp_path / "data" / "examples" / "text2sql" / "resources.csv", "room\n403\n")
+    loader = ResourceLoader(
+        root=tmp_path,
+        skill_registry=SkillRegistry(skills_root=tmp_path / "skills"),
+        agent_registry=AgentRegistry(subagents_root=tmp_path / "subagents"),
+    )
+
+    signature = loader.discover().signature
+
+    assert not any("data/examples" in path for path, _mtime, _size in signature)
 
 
 def test_resource_loader_includes_bot_changes(tmp_path, monkeypatch) -> None:

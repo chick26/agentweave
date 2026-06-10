@@ -19,8 +19,8 @@ build-backend = "setuptools.build_meta"
 
 [project.scripts]
 agentweave-server = "agent_runtime.server.__main__:main"
-agentweave-prepare-text2sql = "subagents.text2sql.prepare.sqlite:main"
-agentweave-prepare-rag = "subagents.rag.prepare.index:main"
+agentweave-prepare-text2sql = "agentweave_prepare.text2sql:main"
+agentweave-prepare-rag = "agentweave_prepare.rag:main"
 
 [dependency-groups]
 dev = [
@@ -33,6 +33,7 @@ package = true
 [tool.setuptools.packages.find]
 include = [
     "agent_runtime*",
+    "agentweave_prepare*",
     "subagents*",
 ]
 

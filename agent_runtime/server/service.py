@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from agent_runtime.common import agentweave_data_dir, utc_now_iso
-from agent_runtime.core.orchestrator import AgentRuntime
+from agent_runtime.core.runtime import AgentRuntime
 from agent_runtime.core.result_events import extract_result_metadata
 from agent_runtime.core.runtime_utils import to_jsonable
 from agent_runtime.storage.diagnostic_store import DiagnosticStore
@@ -26,9 +26,6 @@ class AgentServiceConfig:
     api_key: str
     session_db_path: Path
     max_tokens: int = 4096
-    sql_base_url: str | None = None
-    sql_model_name: str | None = None
-    sql_max_tokens: int = 2048
     embedding_base_url: str | None = None
     embedding_model_name: str | None = None
     memory_enabled: bool | None = None
@@ -41,19 +38,11 @@ class AgentServiceConfig:
         data_dir = agentweave_data_dir(resolved_root)
         return cls(
             root=resolved_root,
-            base_url=os.getenv("ORCHESTRATOR_BASE_URL")
-            or os.getenv("QWEN36_BASE_URL", "http://localhost:8000/v1"),
-            model_name=os.getenv("ORCHESTRATOR_MODEL")
-            or os.getenv("QWEN36_MODEL", "qwen3.6-27b"),
-            api_key=os.getenv("OPENAI_API_KEY", "not-needed"),
+            base_url=os.getenv("CHAT_BASE_URL", "http://localhost:8000/v1"),
+            model_name=os.getenv("CHAT_MODEL", "qwen3.6-27b"),
+            api_key=os.getenv("CHAT_API_KEY") or os.getenv("OPENAI_API_KEY", "not-needed"),
             session_db_path=data_dir / "server_sessions.sqlite",
-            max_tokens=int(
-                os.getenv("ORCHESTRATOR_MAX_TOKENS")
-                or os.getenv("QWEN36_MAX_TOKENS", "8192")
-            ),
-            sql_base_url=os.getenv("EXECUTOR_BASE_URL") or None,
-            sql_model_name=os.getenv("EXECUTOR_MODEL") or None,
-            sql_max_tokens=int(os.getenv("EXECUTOR_MAX_TOKENS", "2048")),
+            max_tokens=int(os.getenv("CHAT_MAX_TOKENS", "8192")),
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL") or None,
             embedding_model_name=os.getenv("EMBEDDING_MODEL") or None,
             memory_enabled=_optional_bool(os.getenv("MEMORY_ENABLED")),
@@ -254,19 +243,24 @@ class AgentService:
         page = max(1, int(page))
         page_size = min(1000, max(1, int(page_size)))
         offset = (page - 1) * page_size
-        metadata = self.runtime.result_store.get_metadata(result_id)
-        rows = self.runtime.result_store.get_page(result_id, offset=offset, limit=page_size)
-        total_rows = int(metadata.get("row_count") or 0)
+        artifact = self.runtime.result_store.get_artifact_page(
+            result_id,
+            offset=offset,
+            limit=page_size,
+        )
+        metrics = artifact.get("metrics") if isinstance(artifact.get("metrics"), dict) else {}
+        total_rows = int(metrics.get("stored_count") or metrics.get("row_count") or 0)
+        rows = artifact.get("rows") if isinstance(artifact.get("rows"), list) else []
         return {
+            **artifact,
             "result_id": result_id,
-            "page": page,
-            "page_size": page_size,
-            "total_rows": total_rows,
-            "row_count_is_exact": True,
-            "has_more": offset + len(rows) < total_rows,
-            "columns": list(metadata.get("columns") or []),
-            "rows": rows,
-            "sql": str(metadata.get("sql") or ""),
+            "page": {
+                "number": page,
+                "size": page_size,
+                "offset": offset,
+                "total_rows": total_rows,
+                "has_more": offset + len(rows) < total_rows,
+            },
             "download_url": f"/results/{result_id}.csv",
         }
 
@@ -346,9 +340,10 @@ class AgentService:
             answer = str(response.get("final_output") or "")
             events = [to_jsonable(event) for event in response.get("events", [])]
             model_logs = [to_jsonable(log) for log in response.get("model_logs", [])]
+            results = extract_result_metadata(events)
             result_ids = [
                 str(item["result_id"])
-                for item in extract_result_metadata(events)
+                for item in results
                 if item.get("result_id")
             ]
             with record.condition:
@@ -380,6 +375,7 @@ class AgentService:
                     "timestamp": completed_at,
                     "answer": answer,
                     "result_ids": result_ids,
+                    "results": results,
                     "diagnostic_run_id": record.run_id,
                 }
             )
@@ -477,9 +473,6 @@ def _build_runtime(config: AgentServiceConfig) -> AgentRuntime:
         api_key=config.api_key,
         session_db_path=config.session_db_path,
         max_tokens=config.max_tokens,
-        sql_base_url=config.sql_base_url,
-        sql_model_name=config.sql_model_name,
-        sql_max_tokens=config.sql_max_tokens,
         embedding_base_url=config.embedding_base_url,
         embedding_model_name=config.embedding_model_name,
         memory_enabled=config.memory_enabled,
@@ -515,8 +508,10 @@ def _result_created_sse_event(
     if event.get("kind") != "result_created":
         return None
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-    ui_content = payload.get("ui_content") if isinstance(payload.get("ui_content"), dict) else payload
-    result_id = ui_content.get("result_id")
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else None
+    if result is None:
+        result = payload.get("ui_content") if isinstance(payload.get("ui_content"), dict) else payload
+    result_id = result.get("result_id")
     if not result_id:
         return None
     return {
@@ -524,11 +519,7 @@ def _result_created_sse_event(
         "run_id": record.run_id,
         "timestamp": str(event.get("timestamp") or utc_now_iso()),
         "result_id": str(result_id),
-        "sample_rows": ui_content.get("sample_rows")
-        if isinstance(ui_content.get("sample_rows"), list)
-        else [],
-        "row_count": int(ui_content.get("row_count") or ui_content.get("stored_row_count") or 0),
-        "has_more": bool(ui_content.get("has_more") or ui_content.get("store_truncated")),
+        "result": result,
     }
 
 

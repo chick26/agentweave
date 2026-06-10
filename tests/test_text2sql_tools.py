@@ -2,26 +2,75 @@
 
 import asyncio
 import json
+import sqlite3
 from pathlib import Path
 
 from agents.tool_context import ToolContext
 from agent_runtime.core.context import RuntimeContext
-from agent_runtime.storage.database import CsvSQLiteBackend
+from agent_runtime.storage.database import DatabaseBackend, SqlDatabaseBackend
 from agent_runtime.core.model_profiles import ModelProfile
 from agent_runtime.storage.result_store import ResultStore
 from agent_runtime.registry.skill_registry import AgentRegistry
 from agent_runtime.subagent_api import subagent_context
 from subagents.text2sql import extension as tools
+from subagents.text2sql.core.runtime_state import (
+    TEXT2SQL_STATE_NAMESPACE,
+    Text2SQLState,
+)
+
+
+def _model_profile() -> ModelProfile:
+    return ModelProfile(
+        base_url="http://example.test/v1",
+        model_name="chat",
+        api_key="not-needed",
+        max_tokens=128,
+    )
+
+
+def _sqlite_backend(
+    tmp_path: Path,
+    table: str,
+    columns: list[tuple[str, str]],
+    rows: list[tuple[object, ...]],
+) -> SqlDatabaseBackend:
+    db_path = tmp_path / f"{table}.sqlite"
+    connection = sqlite3.connect(db_path)
+    try:
+        column_sql = ", ".join(f"{name} {kind}" for name, kind in columns)
+        connection.execute(f"CREATE TABLE {table} ({column_sql})")
+        placeholders = ", ".join("?" for _ in columns)
+        connection.executemany(
+            f"INSERT INTO {table} VALUES ({placeholders})",
+            rows,
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return SqlDatabaseBackend(f"sqlite:///{db_path}")
+
+
+def _install_text2sql_backend(run_ctx: RuntimeContext, backend: DatabaseBackend) -> None:
+    state = subagent_context(run_ctx).typed_state(
+        TEXT2SQL_STATE_NAMESPACE,
+        Text2SQLState,
+    )
+    state.backend = backend
 
 
 def test_text2sql_extension_connects_prepared_backend_from_env(tmp_path, monkeypatch):
-    csv_path = tmp_path / "resources.csv"
-    csv_path.write_text("machine_room\n403\n", encoding="utf-8")
-    monkeypatch.setenv("TEXT2SQL_BACKEND", "csv")
-    monkeypatch.setenv("TEXT2SQL_TABLES_JSON", json.dumps({"resources": str(csv_path)}))
+    db_path = tmp_path / "text2sql.sqlite"
+    connection = sqlite3.connect(db_path)
+    connection.execute("CREATE TABLE resources (machine_room TEXT)")
+    connection.execute("INSERT INTO resources VALUES ('403')")
+    connection.commit()
+    connection.close()
+    monkeypatch.setenv("TEXT2SQL_BACKEND", "sqlite")
+    monkeypatch.setenv("TEXT2SQL_DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setattr(tools, "_backend_cache", None)
+    monkeypatch.setattr(tools, "_backend_cache_key", None)
 
-    backend = tools._connect_backend(Path("."))
+    backend = tools._connect_backend()
 
     assert backend.get_columns("resources") == ["machine_room"]
 
@@ -47,13 +96,13 @@ def test_execute_sql_returns_result_pointer_and_sample(tmp_path, monkeypatch):
     store = ResultStore(tmp_path / "agent_results.sqlite")
     run_ctx = RuntimeContext(
         run_id="run-1",
-        model_profiles={},
-        state={"active_domain": "sea_cable_faults"},
+        model_profile=_model_profile(),
         result_store=store,
     )
 
     output = tools._build_execute_output(
         run_ctx=subagent_context(run_ctx),
+        domain_name="sea_cable_faults",
         sql="SELECT sea_cable_no FROM sea_cable_faults",
         rows=[
             {"sea_cable_no": "NCP"},
@@ -79,18 +128,21 @@ def test_execute_sql_returns_result_pointer_and_sample(tmp_path, monkeypatch):
 
 def test_execute_sql_emits_result_created_ui_event(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "SQL_RESULT_SAMPLE_ROWS", 1)
-    csv_path = tmp_path / "faults.csv"
-    csv_path.write_text("sea_cable_no\nNCP\nAPG\n", encoding="utf-8")
-    backend = CsvSQLiteBackend({"sea_cable_faults": csv_path})
+    backend = _sqlite_backend(
+        tmp_path,
+        "sea_cable_faults",
+        [("sea_cable_no", "TEXT")],
+        [("NCP",), ("APG",)],
+    )
     store = ResultStore(tmp_path / "agent_results.sqlite")
     run_ctx = RuntimeContext(
         run_id="execute-run",
-        model_profiles={},
+        model_profile=_model_profile(),
         result_store=store,
-        state={"active_domain": "sea_cable_faults", "active_table": "sea_cable_faults", "database_backend": backend},
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
         active_subagent="text2sql",
     )
+    _install_text2sql_backend(run_ctx, backend)
 
     output = asyncio.run(
         tools.execute_sql.on_invoke_tool(
@@ -124,8 +176,9 @@ def test_execute_sql_emits_result_created_ui_event(tmp_path, monkeypatch):
     assert payload["sample_rows"] == [{"sea_cable_no": "NCP"}]
     assert result_events
     assert result_events[0]["payload"]["ui_content"]["result_id"] == payload["result_id"]
-    assert result_events[0]["payload"]["ui_content"]["row_count"] == 2
-    assert result_events[0]["payload"]["ui_content"]["stored_row_count"] == 2
+    assert result_events[0]["payload"]["ui_content"]["metrics"]["row_count"] == 2
+    assert result_events[0]["payload"]["ui_content"]["metrics"]["stored_count"] == 2
+    assert result_events[0]["payload"]["ui_content"]["metadata"]["sql"] == "SELECT sea_cable_no FROM sea_cable_faults"
     assert [event["kind"] for event in tool_events] == [
         "tool_call_start",
         "tool_result",
@@ -138,12 +191,11 @@ def test_execute_sql_emits_result_created_ui_event(tmp_path, monkeypatch):
 def test_get_domain_schema_requires_prepared_database_environment(monkeypatch):
     monkeypatch.delenv("TEXT2SQL_BACKEND", raising=False)
     monkeypatch.delenv("TEXT2SQL_DATABASE_URL", raising=False)
-    monkeypatch.delenv("TEXT2SQL_TABLES_JSON", raising=False)
     monkeypatch.setattr(tools, "_backend_cache", None)
     monkeypatch.setattr(tools, "_backend_cache_key", None)
     run_ctx = RuntimeContext(
         run_id="schema-missing-db-run",
-        model_profiles={},
+        model_profile=_model_profile(),
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
         active_subagent="text2sql",
     )
@@ -170,21 +222,24 @@ def test_get_domain_schema_requires_prepared_database_environment(monkeypatch):
     payload = json.loads(output)
 
     assert "database environment is not prepared" in payload["error"]
-    assert "ENVIRONMENT.md" in payload["error"]
+    assert "docs/environment/text2sql.md" in payload["error"]
 
 
 def test_execute_sql_emits_failed_tool_lifecycle(tmp_path):
-    csv_path = tmp_path / "faults.csv"
-    csv_path.write_text("sea_cable_no\nNCP\n", encoding="utf-8")
-    backend = CsvSQLiteBackend({"sea_cable_faults": csv_path})
+    backend = _sqlite_backend(
+        tmp_path,
+        "sea_cable_faults",
+        [("sea_cable_no", "TEXT")],
+        [("NCP",)],
+    )
     run_ctx = RuntimeContext(
         run_id="execute-failed-run",
-        model_profiles={},
+        model_profile=_model_profile(),
         result_store=ResultStore(tmp_path / "agent_results.sqlite"),
-        state={"active_domain": "sea_cable_faults", "active_table": "sea_cable_faults", "database_backend": backend},
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
         active_subagent="text2sql",
     )
+    _install_text2sql_backend(run_ctx, backend)
 
     output = asyncio.run(
         tools.execute_sql.on_invoke_tool(
@@ -226,18 +281,21 @@ def test_execute_sql_emits_failed_tool_lifecycle(tmp_path):
 def test_execute_sql_marks_store_truncation_without_claiming_exact_total(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "SQL_RESULT_STORE_MAX_ROWS", 2)
     monkeypatch.setattr(tools, "SQL_RESULT_SAMPLE_ROWS", 1)
-    csv_path = tmp_path / "faults.csv"
-    csv_path.write_text("sea_cable_no\nNCP\nAPG\nSJC\n", encoding="utf-8")
-    backend = CsvSQLiteBackend({"sea_cable_faults": csv_path})
+    backend = _sqlite_backend(
+        tmp_path,
+        "sea_cable_faults",
+        [("sea_cable_no", "TEXT")],
+        [("NCP",), ("APG",), ("SJC",)],
+    )
     store = ResultStore(tmp_path / "agent_results.sqlite")
     run_ctx = RuntimeContext(
         run_id="execute-truncated-run",
-        model_profiles={},
+        model_profile=_model_profile(),
         result_store=store,
-        state={"active_domain": "sea_cable_faults", "active_table": "sea_cable_faults", "database_backend": backend},
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
         active_subagent="text2sql",
     )
+    _install_text2sql_backend(run_ctx, backend)
 
     output = asyncio.run(
         tools.execute_sql.on_invoke_tool(
@@ -267,7 +325,8 @@ def test_execute_sql_marks_store_truncation_without_claiming_exact_total(tmp_pat
     assert payload["store_truncated"] is True
     assert payload["has_more"] is True
     assert payload["row_count_is_exact"] is False
-    assert store.get_metadata(payload["result_id"])["row_count"] == 2
+    assert store.get_metadata(payload["result_id"])["metrics"]["row_count"] == 2
+    assert store.get_metadata(payload["result_id"])["metrics"]["count_is_exact"] is False
     assert store.get_page(payload["result_id"], offset=0, limit=10) == [
         {"sea_cable_no": "NCP"},
         {"sea_cable_no": "APG"},
@@ -275,28 +334,19 @@ def test_execute_sql_marks_store_truncation_without_claiming_exact_total(tmp_pat
 
 
 def test_explicit_schema_value_and_sql_generation_steps(tmp_path, monkeypatch):
-    csv_path = tmp_path / "resources.csv"
-    csv_path.write_text(
-        "machine_room,cabinet_business_status\n"
-        "403,Available\n",
-        encoding="utf-8",
+    backend = _sqlite_backend(
+        tmp_path,
+        "resources",
+        [("machine_room", "TEXT"), ("cabinet_business_status", "TEXT")],
+        [("403", "Available")],
     )
-    backend = CsvSQLiteBackend({"resources": csv_path})
     run_ctx = RuntimeContext(
         run_id="explicit-text2sql-run",
-        model_profiles={
-            "executor": ModelProfile(
-                role="executor",
-                base_url="http://sql.test/v1",
-                model_name="sql",
-                api_key="key",
-                max_tokens=128,
-            )
-        },
-        state={"database_backend": backend},
+        model_profile=_model_profile(),
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
         active_subagent="text2sql",
     )
+    _install_text2sql_backend(run_ctx, backend)
 
     async def fake_call_model(self, **kwargs):
         return (

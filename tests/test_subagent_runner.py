@@ -17,6 +17,10 @@ from agent_runtime.worker.subagent_runner import (
     _coerce_subagent_result,
     _subagent_tool_payload,
 )
+from agent_runtime.worker.subagent_extensions import (
+    load_subagent_extension,
+    resolve_extension_capabilities,
+)
 from agent_runtime.memory.memory_manager import MemoryManager
 from agent_runtime.memory.memory_store import MemoryStore
 from agent_runtime.registry.skill_registry import AgentRegistry
@@ -24,6 +28,21 @@ from agent_runtime.registry.skill_registry import AgentRegistry
 
 def _registry() -> AgentRegistry:
     return AgentRegistry(subagents_root=Path("subagents"))
+
+
+def _model_profile(
+    *,
+    base_url: str = "http://example.test/v1",
+    model_name: str = "chat",
+    extra_body: dict | None = None,
+) -> ModelProfile:
+    return ModelProfile(
+        base_url=base_url,
+        model_name=model_name,
+        api_key="not-needed",
+        max_tokens=128,
+        extra_body=extra_body or {},
+    )
 
 
 def test_text2sql_worker_uses_sdk_runner_with_isolated_context(tmp_path, monkeypatch):
@@ -55,22 +74,7 @@ def test_text2sql_worker_uses_sdk_runner_with_isolated_context(tmp_path, monkeyp
     context = RuntimeContext(
         run_id="test",
         session_id="test",
-        model_profiles={
-            "orchestrator": ModelProfile(
-                role="orchestrator",
-                base_url="http://example.test/orchestrator/v1",
-                model_name="orchestrator",
-                api_key="not-needed",
-                max_tokens=128,
-            ),
-            "executor": ModelProfile(
-                role="executor",
-                base_url="http://example.test/v1",
-                model_name="sql",
-                api_key="not-needed",
-                max_tokens=128,
-            ),
-        },
+        model_profile=_model_profile(model_name="chat"),
         state={"tenant": "root"},
     )
 
@@ -93,7 +97,6 @@ def test_text2sql_worker_uses_sdk_runner_with_isolated_context(tmp_path, monkeyp
     assert context.state["tenant"] == "root"
     assert isinstance(captured["agent"].model, LoggingOpenAIChatCompletionsModel)
     assert {tool.name for tool in captured["agent"].tools} == {
-        "get_current_time",
         "list_domains",
         "get_domain_schema",
         "search_domain_values",
@@ -113,8 +116,8 @@ def test_text2sql_worker_uses_sdk_runner_with_isolated_context(tmp_path, monkeyp
         for event in context.events
         if event["kind"] == "subagent_dispatch"
     )
-    assert dispatch_payload["model_role"] == "orchestrator"
-    assert dispatch_payload["model"] == "orchestrator"
+    assert "model_role" not in dispatch_payload
+    assert dispatch_payload["model"] == "chat"
 
 
 def test_tool_registry_enable_disable(monkeypatch):
@@ -123,7 +126,6 @@ def test_tool_registry_enable_disable(monkeypatch):
     manifest = registry.get("text2sql")
 
     assert {tool.name for tool in runner._build_subagent_tools(manifest)} == {
-        "get_current_time",
         "list_domains",
         "get_domain_schema",
         "search_domain_values",
@@ -145,7 +147,6 @@ def test_subagent_manifest_tools_field_is_rejected(tmp_path):
         "description: Fake worker subagent.\n"
         "execution:\n"
         "  mode: worker\n"
-        "  model_role: orchestrator\n"
         "  max_turns: 3\n"
         "  timeout_seconds: 7.5\n"
         "tools:\n"
@@ -164,15 +165,23 @@ def test_worker_subagent_loads_extension_tools_from_public_subagent_api(tmp_path
     subagent_dir = subagents_root / "extension_worker"
     subagent_dir.mkdir(parents=True)
     (subagent_dir / "extension.py").write_text(
-        "from agent_runtime.subagent_api import tool\n\n"
+        "from agent_runtime.subagent_api import ResultArtifactSpec, tool\n\n"
+        "class DemoFormatter:\n"
+        "    artifact_type = 'demo_artifact'\n"
+        "    def format(self, payload):\n"
+        "        return ResultArtifactSpec(artifact_type=self.artifact_type, rows=[payload])\n\n"
         "@tool\n"
         "async def extension_tool(value: str) -> str:\n"
         "    return value\n\n"
         "def build_prompt_context(manifest):\n"
         "    return {'extra_context': 'from extension'}\n\n"
+        "def resolve_capabilities(manifest):\n"
+        "    return {'capabilities': manifest.capabilities, 'policy': manifest.policies.get('demo', {})}\n\n"
         "def register(api):\n"
         "    api.tool(extension_tool)\n"
-        "    api.prompt_context(build_prompt_context)\n",
+        "    api.prompt_context(build_prompt_context)\n"
+        "    api.result_formatter(DemoFormatter())\n"
+        "    api.capability_resolver(resolve_capabilities)\n",
         encoding="utf-8",
     )
     (subagent_dir / "AGENT.yaml").write_text(
@@ -180,9 +189,13 @@ def test_worker_subagent_loads_extension_tools_from_public_subagent_api(tmp_path
         "description: Extension worker subagent.\n"
         "execution:\n"
         "  mode: worker\n"
-        "  model_role: orchestrator\n"
         "extension:\n"
-        "  module: subagents.extension_worker.extension\n",
+        "  module: subagents.extension_worker.extension\n"
+        "capabilities:\n"
+        "  - demo.capability\n"
+        "policies:\n"
+        "  demo:\n"
+        "    enabled: true\n",
         encoding="utf-8",
     )
     (subagent_dir / "prompt.md").write_text(
@@ -198,6 +211,13 @@ def test_worker_subagent_loads_extension_tools_from_public_subagent_api(tmp_path
 
     assert [tool.name for tool in tools] == ["extension_tool"]
     assert "from extension" in runner._build_worker_prompt(manifest)
+    extension = load_subagent_extension(manifest)
+    assert extension is not None
+    assert extension.result_formatters[0].artifact_type == "demo_artifact"
+    assert resolve_extension_capabilities(manifest) == {
+        "capabilities": ["demo.capability"],
+        "policy": {"enabled": True},
+    }
 
 
 def test_raw_extension_tool_gets_standard_events(tmp_path, monkeypatch):
@@ -216,7 +236,6 @@ def test_raw_extension_tool_gets_standard_events(tmp_path, monkeypatch):
         "description: Raw callable worker.\n"
         "execution:\n"
         "  mode: worker\n"
-        "  model_role: orchestrator\n"
         "extension:\n"
         "  module: subagents.raw_worker.extension\n",
         encoding="utf-8",
@@ -229,15 +248,7 @@ def test_raw_extension_tool_gets_standard_events(tmp_path, monkeypatch):
     context = RuntimeContext(
         run_id="raw-run",
         session_id="raw-session",
-        model_profiles={
-            "orchestrator": ModelProfile(
-                role="orchestrator",
-                base_url="http://example.test/v1",
-                model_name="orchestrator",
-                api_key="not-needed",
-                max_tokens=128,
-            )
-        },
+        model_profile=_model_profile(),
     )
 
     output = asyncio.run(
@@ -261,18 +272,7 @@ def test_raw_extension_tool_gets_standard_events(tmp_path, monkeypatch):
     assert context.events[1]["payload"]["metadata"]["tool_name"] == "echo"
 
 
-def test_subagent_model_role_defaults_to_manifest_and_allows_env_override(monkeypatch):
-    registry = _registry()
-    runner = SubagentRunner(registry=registry, root=Path("."))
-    manifest = registry.get("text2sql")
-
-    assert runner.resolve_model_role(manifest) == "orchestrator"
-
-    monkeypatch.setenv("SUBAGENT_TEXT2SQL_MODEL_ROLE", "executor")
-    assert runner.resolve_model_role(manifest) == "executor"
-
-
-def test_worker_uses_manifest_model_overrides(tmp_path, monkeypatch):
+def test_worker_uses_single_runtime_model_profile(tmp_path, monkeypatch):
     subagents_root = tmp_path / "subagents"
     subagent_dir = subagents_root / "model_worker"
     subagent_dir.mkdir(parents=True)
@@ -282,11 +282,6 @@ def test_worker_uses_manifest_model_overrides(tmp_path, monkeypatch):
         "description: Model override worker.\n"
         "execution:\n"
         "  mode: worker\n"
-        "  model_role: executor\n"
-        "model:\n"
-        "  llm: manifest-chat\n"
-        "  extra_body:\n"
-        "    temperature: 0\n"
         "extension:\n"
         "  module: subagents.model_worker.extension\n",
         encoding="utf-8",
@@ -308,16 +303,11 @@ def test_worker_uses_manifest_model_overrides(tmp_path, monkeypatch):
     context = RuntimeContext(
         run_id="test",
         session_id="test",
-        model_profiles={
-            "executor": ModelProfile(
-                role="executor",
-                base_url="http://executor/v1",
-                model_name="executor-chat",
-                api_key="not-needed",
-                max_tokens=128,
-                extra_body={"top_p": 0.9},
-            )
-        },
+        model_profile=_model_profile(
+            base_url="http://chat/v1",
+            model_name="chat-model",
+            extra_body={"top_p": 0.9},
+        ),
     )
 
     asyncio.run(
@@ -328,11 +318,8 @@ def test_worker_uses_manifest_model_overrides(tmp_path, monkeypatch):
         )
     )
 
-    assert str(captured["agent"].model.model) == "manifest-chat"
-    assert captured["agent"].model_settings.extra_body == {
-        "top_p": 0.9,
-        "temperature": 0,
-    }
+    assert str(captured["agent"].model.model) == "chat-model"
+    assert captured["agent"].model_settings.extra_body == {"top_p": 0.9}
 
 
 def test_worker_prompt_template_replaces_domains_and_memory(tmp_path):
@@ -365,7 +352,6 @@ def test_worker_prompt_can_use_extension_context(tmp_path, monkeypatch):
         "description: Context worker subagent.\n"
         "execution:\n"
         "  mode: worker\n"
-        "  model_role: orchestrator\n"
         "extension:\n"
         "  module: subagents.context_worker.extension\n",
         encoding="utf-8",
@@ -435,7 +421,6 @@ def test_subagent_result_coercion_normalizes_string_trace_items():
 def test_text2sql_worker_timeout_returns_standard_error(tmp_path, monkeypatch):
     async def fake_runner_run(agent, input, **kwargs):
         run_ctx = kwargs["context"]
-        run_ctx.state["active_domain"] = "sea_cable_faults"
         run_ctx.emit_subagent_trace(
             {
                 "stage": "execute",
@@ -462,22 +447,7 @@ def test_text2sql_worker_timeout_returns_standard_error(tmp_path, monkeypatch):
     context = RuntimeContext(
         run_id="test",
         session_id="test",
-        model_profiles={
-            "orchestrator": ModelProfile(
-                role="orchestrator",
-                base_url="http://example.test/orchestrator/v1",
-                model_name="orchestrator",
-                api_key="not-needed",
-                max_tokens=128,
-            ),
-            "executor": ModelProfile(
-                role="executor",
-                base_url="http://example.test/v1",
-                model_name="sql",
-                api_key="not-needed",
-                max_tokens=128,
-            ),
-        },
+        model_profile=_model_profile(),
     )
 
     result = asyncio.run(

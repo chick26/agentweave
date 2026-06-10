@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import os
-import json
-from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -17,19 +15,18 @@ from agent_runtime.subagent_api import (
     tool,
     tool_finish,
     tool_start,
+    ResultArtifactSpec,
 )
 from agent_runtime.shared.common import columns_from_rows
-from agent_runtime.shared.database import CsvSQLiteBackend, DatabaseBackend, SqlDatabaseBackend
+from agent_runtime.shared.database import DatabaseBackend, SqlDatabaseBackend
 from agent_runtime.shared.manifest import AgentManifest
-from agent_runtime.shared.models import (
-    get_current_time_payload,
-)
 from subagents.text2sql.core.domain_catalog import (
     Text2SQLDomainCatalog,
     business_metrics_to_prompt,
     domain_schema_payload,
 )
 from subagents.text2sql.core.sql_generation import generate_sql
+from subagents.text2sql.core.runtime_state import Text2SQLRunStateManager
 from subagents.text2sql.core.sql_safety import (
     validate_sql_uses_selected_schema,
 )
@@ -39,16 +36,15 @@ SQL_RESULT_SAMPLE_ROWS = int(os.getenv("SQL_RESULT_SAMPLE_ROWS", "50"))
 SQL_RESULT_STORE_MAX_ROWS = int(os.getenv("SQL_RESULT_STORE_MAX_ROWS", "1000"))
 SQL_RESULT_CELL_MAX_CHARS = int(os.getenv("SQL_RESULT_CELL_MAX_CHARS", "300"))
 TEXT2SQL_DATABASE_ENVIRONMENT_ERROR = (
-    "Text2SQL database environment is not prepared. Follow "
-    "subagents/text2sql/ENVIRONMENT.md, prepare or connect the database, "
-    "then restart runtime before calling Text2SQL tools."
+    "Text2SQL database environment is not prepared. Follow docs/environment/text2sql.md, "
+    "prepare or connect the database, then restart runtime before calling Text2SQL tools."
 )
 _backend_cache: DatabaseBackend | None = None
-_backend_cache_key: tuple[str, str, str, str] | None = None
+_backend_cache_key: tuple[str, str] | None = None
 
 
 def register(api: Any) -> None:
-    api.tool(get_current_time)
+    api.result_formatter(SqlResultFormatter())
     api.tool(list_domains)
     api.tool(get_domain_schema)
     api.tool(search_domain_values)
@@ -58,8 +54,41 @@ def register(api: Any) -> None:
     api.prompt_context(build_prompt_context)
 
 
-def validate_environment(manifest: AgentManifest) -> None:
-    _connect_backend(manifest.location.parent.parent.parent)
+class SqlResultFormatter:
+    artifact_type = "sql_result"
+
+    def format(self, payload: dict[str, Any]) -> ResultArtifactSpec:
+        rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+        sample_rows = (
+            payload.get("sample_rows")
+            if isinstance(payload.get("sample_rows"), list)
+            else rows[:SQL_RESULT_SAMPLE_ROWS]
+        )
+        domain = str(payload.get("domain") or "")
+        sql = str(payload.get("sql") or "")
+        columns = payload.get("columns") if isinstance(payload.get("columns"), list) else columns_from_rows(rows)
+        return ResultArtifactSpec(
+            artifact_type=self.artifact_type,
+            title=str(payload.get("title") or f"SQL Result: {domain or 'query'}"),
+            source=str(payload.get("source") or "execute_sql"),
+            rows=rows,
+            columns=columns,
+            preview_rows=sample_rows,
+            metadata={
+                "domain": domain,
+                "sql": sql,
+                "sample_max_rows": int(payload.get("sample_max_rows") or SQL_RESULT_SAMPLE_ROWS),
+                "store_max_rows": int(payload.get("store_max_rows") or SQL_RESULT_STORE_MAX_ROWS),
+                "truncated": bool(payload.get("truncated")),
+                "store_truncated": bool(payload.get("store_truncated")),
+            },
+            row_count=int(payload.get("row_count") or len(rows)),
+            row_count_is_exact=bool(payload.get("row_count_is_exact", True)),
+        )
+
+
+def validate_environment(_manifest: AgentManifest) -> None:
+    _connect_backend()
 
 
 def build_prompt_context(manifest: AgentManifest) -> dict[str, str]:
@@ -74,54 +103,6 @@ class LinkedValueInput(BaseModel):
     count: int | None = None
     source: str = "search_domain_values"
     query: str = ""
-
-@tool
-async def get_current_time(
-    ctx: SubagentToolContext,
-    timezone_name: str = "",
-) -> str:
-    """Resolve current date and time for relative-time SQL filters.
-
-    Use when the Text2SQL task contains today, yesterday, recent, current,
-    this week, this month, or a similar relative time phrase that has not
-    already been resolved by the orchestrator.
-
-    Args:
-        timezone_name: Optional IANA timezone name. Empty means application default.
-    """
-    run_ctx = subagent_context(ctx)
-    tool_start(
-        run_ctx,
-        tool_name="get_current_time",
-        input_payload={"timezone_name": timezone_name},
-    )
-    requested_timezone = timezone_name.strip() or run_ctx.timezone_name
-    try:
-        output = get_current_time_payload(requested_timezone)
-    except ValueError as exc:
-        output = {"timezone": requested_timezone, "error": str(exc)}
-    run_ctx.trace(
-        stage="current_time",
-        title="获取当前时间",
-        input={"timezone_name": timezone_name or "(default)"},
-        output=output,
-    )
-    tool_output = ToolOutput(
-        llm_content=output,
-        ui_content=output,
-        metadata={
-            "tool_name": "get_current_time",
-            "error": output.get("error", "") if isinstance(output, dict) else "",
-        },
-    )
-    tool_finish(
-        run_ctx,
-        tool_name="get_current_time",
-        output=tool_output,
-        status="failed" if tool_output.metadata.get("error") else "completed",
-    )
-    return tool_output.to_llm_json()
-
 
 @tool
 async def list_domains(ctx: SubagentToolContext) -> str:
@@ -193,12 +174,11 @@ async def get_domain_schema(
     )
     try:
         domain = _domain_catalog_from_context(ctx).get_domain(domain_name)
-        schema_text = _activate_domain_context(run_ctx, domain)
-        selected_columns = _require_backend(run_ctx).get_columns(domain.table)
+        active = _state_manager(run_ctx).activate_domain(domain)
         payload = domain_schema_payload(
             domain=domain,
-            schema_text=schema_text,
-            columns=selected_columns,
+            schema_text=active.schema_text,
+            columns=active.columns,
         )
     except Exception as exc:
         payload = {
@@ -264,9 +244,9 @@ async def search_domain_values(
     )
     try:
         domain = _domain_catalog_from_context(ctx).get_domain(domain_name)
-        if run_ctx.cache.get("active_domain") != domain.name or run_ctx.cache.get("active_table") != domain.table:
-            _activate_domain_context(run_ctx, domain)
-        linked_values = _search_value_candidates(run_ctx, query, fields)
+        state = _state_manager(run_ctx)
+        state.ensure_domain(domain)
+        linked_values = _search_value_candidates(state, query, fields)
         payload = {
             "domain": domain.name,
             "query": query,
@@ -333,15 +313,17 @@ async def generate_readonly_sql(
     )
     try:
         domain = _domain_catalog_from_context(ctx).get_domain(domain_name)
-        schema_text = _activate_domain_context(run_ctx, domain)
-        selected_columns = _require_backend(run_ctx).get_columns(domain.table)
+        state = _state_manager(run_ctx)
+        active = state.activate_domain(domain)
         generated = await generate_sql(
             ctx=run_ctx,
             question=question,
             domain=domain,
-            schema_text=schema_text,
-            selected_columns=selected_columns,
+            schema_text=active.schema_text,
+            selected_columns=active.columns,
             linked_values=linked_value_payloads,
+            dialect=state.dialect,
+            require_schema_validation=_schema_validation_required(run_ctx),
             constraints=constraints,
         )
         payload = {
@@ -407,20 +389,21 @@ async def execute_sql(
     )
     try:
         domain = _domain_catalog_from_context(ctx).get_domain(domain_name)
-        if run_ctx.cache.get("active_domain") != domain.name or run_ctx.cache.get("active_table") != domain.table:
-            _activate_domain_context(run_ctx, domain)
-        if _strict_schema_validation_enabled():
+        state = _state_manager(run_ctx)
+        active = state.ensure_domain(domain)
+        if _schema_validation_required(run_ctx):
             validate_sql_uses_selected_schema(
                 sql,
-                selected_columns=_require_backend(run_ctx).get_columns(domain.table),
-                allowed_tables=[domain.table],
+                selected_columns=active.columns,
+                allowed_tables=[active.table],
             )
-        fetched_rows = _require_backend(run_ctx).execute_sql(
+        fetched_rows = state.backend.execute_sql(
             sql,
             max_rows=SQL_RESULT_STORE_MAX_ROWS + 1,
         )
         output = _build_execute_output(
             run_ctx=run_ctx,
+            domain_name=active.domain,
             sql=sql,
             rows=fetched_rows[:SQL_RESULT_STORE_MAX_ROWS],
             store_truncated=len(fetched_rows) > SQL_RESULT_STORE_MAX_ROWS,
@@ -461,12 +444,6 @@ async def execute_sql(
             "error": output.get("error") or "",
         },
     )
-    if tool_output.metadata.get("result_id"):
-        run_ctx.result_created(
-            tool_name="execute_sql",
-            ui_content=tool_output.ui_content,
-            metadata=tool_output.metadata,
-        )
     tool_finish(
         run_ctx,
         tool_name="execute_sql",
@@ -476,44 +453,24 @@ async def execute_sql(
     return tool_output.to_llm_json()
 
 
-def _activate_domain_context(run_ctx: SubagentContext, domain: Any) -> str:
-    backend = _require_backend(run_ctx)
-    run_ctx.cache["active_domain"] = domain.name
-    run_ctx.cache["active_table"] = domain.table
-    run_ctx.cache["active_text_fields"] = list(domain.text_fields)
-    run_ctx.cache["active_field_descriptions"] = dict(domain.field_descriptions)
-    schema_text = backend.get_schema_for_prompt(
-        domain.table,
-        domain.field_descriptions,
+def _state_manager(run_ctx: SubagentContext) -> Text2SQLRunStateManager:
+    return Text2SQLRunStateManager.from_context(
+        run_ctx,
+        backend_factory=_connect_backend,
     )
-    run_ctx.trace(
-        stage="activation",
-        title=f"Domain: {domain.name}",
-        input={"domain_name": domain.name},
-        output={
-            "name": domain.name,
-            "description": domain.description,
-            "table": domain.table,
-        },
-    )
-    return schema_text
 
 
 def _search_value_candidates(
-    run_ctx: SubagentContext,
+    state: Text2SQLRunStateManager,
     query: str,
     field_list: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    backend = _require_backend(run_ctx)
-    selected_columns = set(backend.get_columns(run_ctx.cache.get("active_table", "")))
-    fields = [
-        field for field in list(field_list or run_ctx.cache.get("active_text_fields", []))
-        if field in selected_columns
-    ]
+    active = state.active_domain()
+    fields = state.search_fields(field_list)
     results: list[dict[str, Any]] = []
     for field_name in fields:
-        for value, count in backend.search_distinct_values(
-            run_ctx.cache.get("active_table", ""),
+        for value, count in state.backend.search_distinct_values(
+            active.table,
             field_name,
             query,
             limit=10,
@@ -521,7 +478,7 @@ def _search_value_candidates(
             results.append({"field": field_name, "value": value, "count": count, "query": query})
     results.sort(key=lambda item: -item["count"])
     results = results[:20]
-    run_ctx.trace(
+    state.run_ctx.trace(
         stage="search_values",
         title=f"搜索候选值: {query}",
         input={
@@ -536,22 +493,36 @@ def _search_value_candidates(
 def _build_execute_output(
     *,
     run_ctx: SubagentContext,
+    domain_name: str,
     sql: str,
     rows: list[dict[str, Any]],
     store_truncated: bool = False,
 ) -> dict[str, Any]:
     columns = columns_from_rows(rows)
-    result_id = run_ctx.store_result(
-        domain=run_ctx.cache.get("active_domain", ""),
-        sql=sql,
-        rows=rows,
-    )
     sample_rows = _compact_rows_for_tool(rows[:SQL_RESULT_SAMPLE_ROWS])
     stored_row_count = len(rows)
     has_more = bool(store_truncated)
+    row_count_is_exact = not has_more
+    artifact = run_ctx.store_artifact(
+        artifact_type="sql_result",
+        tool_name="execute_sql",
+        payload={
+            "domain": domain_name,
+            "sql": sql,
+            "rows": rows,
+            "columns": columns,
+            "sample_rows": sample_rows,
+            "row_count": stored_row_count,
+            "row_count_is_exact": row_count_is_exact,
+            "truncated": store_truncated or len(rows) > len(sample_rows),
+            "store_truncated": store_truncated,
+            "sample_max_rows": SQL_RESULT_SAMPLE_ROWS,
+            "store_max_rows": SQL_RESULT_STORE_MAX_ROWS,
+        },
+    )
     return {
         "sql": sql,
-        "result_id": result_id,
+        "result_id": artifact.get("result_id", ""),
         "row_count": stored_row_count,
         "stored_row_count": stored_row_count,
         "columns": columns,
@@ -560,7 +531,7 @@ def _build_execute_output(
         "truncated": store_truncated or len(rows) > len(sample_rows),
         "store_truncated": store_truncated,
         "has_more": has_more,
-        "row_count_is_exact": not has_more,
+        "row_count_is_exact": row_count_is_exact,
         "sample_max_rows": SQL_RESULT_SAMPLE_ROWS,
         "store_max_rows": SQL_RESULT_STORE_MAX_ROWS,
         "error": None,
@@ -615,60 +586,29 @@ def _linked_values_to_payload(
     return [item.model_dump() for item in linked_values]
 
 
-def _require_backend(run_ctx: SubagentContext) -> DatabaseBackend:
-    backend = run_ctx.cache.get("database_backend")
-    if backend is None:
-        backend = _connect_backend(run_ctx.runtime_root or Path.cwd())
-        run_ctx.cache["database_backend"] = backend
-    return backend
-
-
-def _connect_backend(root: Path | str) -> DatabaseBackend:
+def _connect_backend() -> DatabaseBackend:
     global _backend_cache, _backend_cache_key
     backend_kind = os.getenv("TEXT2SQL_BACKEND", "").strip().lower()
     database_url = os.getenv("TEXT2SQL_DATABASE_URL", "").strip()
-    raw_tables = os.getenv("TEXT2SQL_TABLES_JSON", "").strip()
-    cache_key = (str(Path(root)), backend_kind, database_url, raw_tables)
+    cache_key = (backend_kind, database_url)
     if _backend_cache is not None and _backend_cache_key == cache_key:
         return _backend_cache
     if database_url and backend_kind in {"", "sqlite"}:
         _backend_cache = SqlDatabaseBackend(database_url)
         _backend_cache_key = cache_key
         return _backend_cache
-    if backend_kind == "csv":
-        if not raw_tables:
-            raise RuntimeError("TEXT2SQL_TABLES_JSON is required when TEXT2SQL_BACKEND=csv.")
-        tables = json.loads(raw_tables)
-        if not isinstance(tables, dict):
-            raise ValueError("TEXT2SQL_TABLES_JSON must be a JSON object.")
-        root_path = Path(root)
-        _backend_cache = CsvSQLiteBackend(
-            {
-                str(table): _resolve_path(root_path, str(path))
-                for table, path in tables.items()
-            }
-        )
-        _backend_cache_key = cache_key
-        return _backend_cache
+    if backend_kind and backend_kind != "sqlite":
+        raise RuntimeError("Text2SQL runtime supports only TEXT2SQL_BACKEND=sqlite.")
     if backend_kind == "sqlite":
         raise RuntimeError("TEXT2SQL_DATABASE_URL is required when TEXT2SQL_BACKEND=sqlite.")
     raise RuntimeError(TEXT2SQL_DATABASE_ENVIRONMENT_ERROR)
 
 
-def _resolve_path(root: Path, value: str) -> Path:
-    path = Path(value).expanduser()
-    if path.is_absolute():
-        return path
-    return root / path
-
-
-def _strict_schema_validation_enabled() -> bool:
-    return os.getenv("TEXT2SQL_STRICT_SCHEMA_VALIDATION", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+def _schema_validation_required(run_ctx: SubagentContext) -> bool:
+    db_policy = run_ctx.policies.get("db", {})
+    if not isinstance(db_policy, dict):
+        return True
+    return bool(db_policy.get("require_schema_validation", True))
 
 
 def _domain_catalog_from_context(ctx: SubagentToolContext) -> Text2SQLDomainCatalog:

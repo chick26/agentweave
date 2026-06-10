@@ -6,9 +6,8 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
-from agents import set_tracing_disabled
+from agents import Agent, ModelSettings, Runner, set_tracing_disabled
 
-from agent_runtime.core.agent_factory import build_orchestrator_agent
 from agent_runtime.core.compressor import ContextCompressor
 from agent_runtime.core.context import RuntimeContext
 from agent_runtime.core.events import EventKind
@@ -28,12 +27,20 @@ from agent_runtime.core.prompts import (
     SYSTEM_PROMPT,
 )
 from agent_runtime.core.result_mapper import AgentRunResult, map_agent_result
-from agent_runtime.core.run_executor import run_orchestrator_agent
+from agent_runtime.core.result_formatters import ResultFormatterRegistry
 from agent_runtime.storage.result_store import ResultStore
-from agent_runtime.core.runtime_utils import to_jsonable
+from agent_runtime.core.runtime_utils import (
+    build_model,
+    get_current_time_payload,
+    json_dumps,
+    to_jsonable,
+)
 from agent_runtime.core.session_manager import SessionManager
-from agent_runtime.core.model_profiles import load_model_profiles
-from agent_runtime.worker.subagent_extensions import validate_extension_environment
+from agent_runtime.core.model_profiles import load_model_profile
+from agent_runtime.worker.subagent_extensions import (
+    register_extension_result_formatters,
+    validate_extension_environment,
+)
 from agent_runtime.core.tool_factory import build_runtime_tools
 from agent_runtime.registry.bot_registry import BotConfig, BotRegistry
 from agent_runtime.registry.resources import ResourceLoader
@@ -53,9 +60,6 @@ class AgentRuntime:
         api_key: str,
         session_db_path: Path,
         max_tokens: int = 4096,
-        sql_base_url: str | None = None,
-        sql_model_name: str | None = None,
-        sql_max_tokens: int = 2048,
         embedding_base_url: str | None = None,
         embedding_model_name: str | None = None,
         memory_enabled: bool | None = None,
@@ -77,14 +81,11 @@ class AgentRuntime:
         self.skill_registry = SkillRegistry(skills_root=self.root / "skills")
         self.agent_registry = AgentRegistry(subagents_root=self.root / "subagents")
         self.timezone_name = timezone_name or os.getenv("AGENTWEAVE_TIMEZONE", "Asia/Hong_Kong")
-        self.model_profiles = load_model_profiles(
-            orchestrator_base_url=base_url,
-            orchestrator_model=model_name,
-            orchestrator_max_tokens=max_tokens,
+        self.model_profile = load_model_profile(
+            base_url=base_url,
+            model_name=model_name,
+            max_tokens=max_tokens,
             api_key=api_key,
-            sql_base_url=sql_base_url,
-            sql_model=sql_model_name,
-            sql_max_tokens=sql_max_tokens,
         )
         self.bot_registry = BotRegistry(
             bots_root=self.root / "bots",
@@ -115,6 +116,11 @@ class AgentRuntime:
         )
         self.todo_state = TodoState()
         self.result_store = ResultStore(self.data_dir / "agent_results.sqlite")
+        self.result_formatters = ResultFormatterRegistry()
+        register_extension_result_formatters(
+            self.agent_registry.discover(),
+            self.result_formatters,
+        )
         self.subagent_runner = SubagentRunner(
             registry=self.agent_registry,
             skill_registry=self.skill_registry,
@@ -122,11 +128,10 @@ class AgentRuntime:
             result_store=self.result_store,
             root=self.root,
         )
-        orchestrator_profile = self.model_profiles["orchestrator"]
         self.compressor = ContextCompressor(
-            context_window=orchestrator_profile.context_window,
-            reserved_output_tokens=orchestrator_profile.max_tokens,
-            model_name=orchestrator_profile.model_name,
+            context_window=self.model_profile.context_window,
+            reserved_output_tokens=self.model_profile.max_tokens,
+            model_name=self.model_profile.model_name,
         )
         self.session_manager = SessionManager(
             session_db_path=self.session_db_path,
@@ -160,8 +165,9 @@ class AgentRuntime:
         context = RuntimeContext(
             run_id=session_id,
             session_id=session_id,
-            model_profiles=self.model_profiles,
+            model_profile=self.model_profile,
             result_store=self.result_store,
+            result_formatters=self.result_formatters,
             event_callback=event_callback,
             timezone_name=self.timezone_name,
             runtime_root=self.root,
@@ -175,32 +181,55 @@ class AgentRuntime:
         session = await self.session_manager.prepare(
             session_id=session_id,
             context=context,
-            model_profile=self.model_profiles["executor"],
+            model_profile=self.model_profile,
         )
 
-        profile = self.model_profiles["orchestrator"]
-        agent = build_orchestrator_agent(
+        agent = Agent[RuntimeContext](
+            name="Agent Orchestrator",
             instructions=self._build_instructions(
                 session_id,
                 current_query=user_input,
                 context=context,
                 bot=bot,
             ),
-            profile=profile,
+            model=build_model(
+                profile=self.model_profile,
+                log_callback=log_callback,
+                title="编排模型调用",
+                kind="orchestration_model",
+            ),
+            model_settings=ModelSettings(max_tokens=self.model_profile.max_tokens),
             tools=self._build_tools(bot=bot),
-            log_callback=log_callback,
         )
 
         try:
-            result = await run_orchestrator_agent(
-                agent=agent,
-                user_input=user_input,
-                context=context,
-                session=session,
-                max_turns=max_turns,
-                model_delta_callback=model_delta_callback,
-                model_name=profile.model_name,
-            )
+            if model_delta_callback is None:
+                result = await Runner.run(
+                    agent,
+                    user_input,
+                    context=context,
+                    session=session,
+                    max_turns=max_turns,
+                )
+            else:
+                result = Runner.run_streamed(
+                    agent,
+                    user_input,
+                    context=context,
+                    session=session,
+                    max_turns=max_turns,
+                )
+                async for stream_event in result.stream_events():
+                    if delta := _model_text_delta(stream_event):
+                        model_delta_callback(
+                            {
+                                "kind": "orchestration_model",
+                                "stage": "model_delta",
+                                "title": "编排模型调用",
+                                "model": self.model_profile.model_name,
+                                "delta": delta,
+                            }
+                        )
         except Exception as exc:
             context.emit_payload(
                 kind=EventKind.ERROR,
@@ -245,6 +274,11 @@ class AgentRuntime:
                 memory_policy_section=MEMORY_POLICY_SECTION if self.memory_enabled else "",
             )
         ]
+        parts.append(
+            "<current_time>\n"
+            f"{json_dumps(get_current_time_payload(self.timezone_name))}\n"
+            "</current_time>"
+        )
         user_memory = _read_optional_path(Path(os.getenv("AGENT_USER_MEMORY_PATH", "~/.agent/USER.md")).expanduser())
         project_rules, _project_rules_source = self.resource_loader.get_project_rules()
         retrieval_events: list[dict[str, Any]] = []
@@ -287,7 +321,13 @@ class AgentRuntime:
         self.memory_manager.clear()
 
     def reload_resources(self) -> dict[str, Any]:
-        return self.resource_loader.reload()
+        summary = self.resource_loader.reload()
+        self.result_formatters = ResultFormatterRegistry()
+        register_extension_result_formatters(
+            self.agent_registry.discover(),
+            self.result_formatters,
+        )
+        return summary
 
     def list_capabilities(self) -> dict[str, Any]:
         return self.resource_loader.capabilities_payload()
@@ -322,16 +362,15 @@ class AgentRuntime:
         bot_id: str = "default",
     ) -> HookResult:
         bot = self.bot_registry.get(bot_id)
-        profile = self.model_profiles["orchestrator"]
         return self.hook_runner.run(
             "SessionStart",
             SessionStartContext(
                 welcome_message=bot.welcome.message,
                 welcome_preset=bot.welcome.preset,
                 welcome_prompt=bot.welcome.prompt,
-                welcome_model_base_url=profile.base_url,
-                welcome_model_name=profile.model_name,
-                welcome_model_api_key=profile.api_key,
+                welcome_model_base_url=self.model_profile.base_url,
+                welcome_model_name=self.model_profile.model_name,
+                welcome_model_api_key=self.model_profile.api_key,
                 memory_context=self.memory_manager.build_orchestrator_context(session_id),
                 subagents=_ordered_subagents(self.agent_registry, bot.subagents),
                 skills=_ordered_skills(self.skill_registry, bot.skills),
@@ -356,3 +395,13 @@ def _ordered_subagents(registry: AgentRegistry, names: list[str]) -> list[Any]:
 def _ordered_skills(registry: SkillRegistry, names: list[str]) -> list[Any]:
     items = {item.name: item for item in registry.discover()}
     return [item for name in names if (item := items.get(name)) is not None]
+
+
+def _model_text_delta(stream_event: Any) -> str:
+    if getattr(stream_event, "type", "") != "raw_response_event":
+        return ""
+    data = getattr(stream_event, "data", None)
+    if getattr(data, "type", "") != "response.output_text.delta":
+        return ""
+    delta = getattr(data, "delta", "")
+    return delta if isinstance(delta, str) else ""

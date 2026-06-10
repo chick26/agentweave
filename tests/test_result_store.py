@@ -19,9 +19,11 @@ def test_result_store_create_page_export(tmp_path):
     metadata = store.get_metadata(result_id)
     assert metadata["result_id"] == result_id
     assert metadata["run_id"] == "run-1"
-    assert metadata["domain"] == "sea_cable_faults"
-    assert metadata["columns"] == ["sea_cable_no", "city"]
-    assert metadata["row_count"] == 2
+    assert metadata["metadata"]["domain"] == "sea_cable_faults"
+    assert metadata["metadata"]["sql"] == "SELECT sea_cable_no, city FROM sea_cable_faults"
+    assert metadata["preview"]["columns"] == ["sea_cable_no", "city"]
+    assert metadata["metrics"]["row_count"] == 2
+    assert metadata["metrics"]["stored_count"] == 2
 
     assert store.get_page(result_id, offset=1, limit=1) == [
         {"sea_cable_no": "APG", "city": "Singapore"}
@@ -54,15 +56,15 @@ def test_result_store_cleanup_by_max_results_and_age(tmp_path):
     )
     with store._lock, store._connection:
         store._connection.execute(
-            "UPDATE query_results SET created_at = ? WHERE id = ?",
+            "UPDATE result_artifacts SET created_at = ? WHERE id = ?",
             ("2000-01-01T00:00:00.000Z", old_id),
         )
         store._connection.execute(
-            "UPDATE query_results SET created_at = ? WHERE id = ?",
+            "UPDATE result_artifacts SET created_at = ? WHERE id = ?",
             ("2999-01-01T00:00:00.000Z", keep_id),
         )
         store._connection.execute(
-            "UPDATE query_results SET created_at = ? WHERE id = ?",
+            "UPDATE result_artifacts SET created_at = ? WHERE id = ?",
             ("2999-01-02T00:00:00.000Z", drop_id),
         )
     assert store.cleanup(max_age_hours=1) == 1
@@ -106,15 +108,21 @@ def test_extract_result_metadata_from_subagent_artifact():
     assert extract_result_metadata(events) == [
         {
             "result_id": "res_123",
-            "row_count": 1,
-            "stored_row_count": 1,
-            "columns": ["value"],
-            "sample_rows": [{"value": 1}],
-            "sample_size": 1,
-            "truncated": False,
-            "store_truncated": False,
-            "has_more": False,
-            "row_count_is_exact": True,
-            "sql": "SELECT 1",
+            "artifact_type": "sql_result",
+            "title": "",
+            "source": "",
+            "preview": {
+                "kind": "rows",
+                "columns": ["value"],
+                "rows": [{"value": 1}],
+            },
+            "metrics": {
+                "row_count": 1,
+                "stored_count": 1,
+                "count_is_exact": True,
+                "truncated": False,
+            },
+            "metadata": {"sql": "SELECT 1"},
+            "created_at": "",
         }
     ]

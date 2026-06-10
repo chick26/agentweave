@@ -92,9 +92,8 @@ def test_context_compressor_soft_summary(tmp_path, monkeypatch):
     store = MemoryStore(tmp_path / "agent_memory.sqlite")
     manager = MemoryManager(store)
     profile = ModelProfile(
-        role="executor",
         base_url="http://example.test/v1",
-        model_name="executor",
+        model_name="chat",
         api_key="not-needed",
         max_tokens=2048,
         context_window=32768,

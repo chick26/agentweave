@@ -205,30 +205,48 @@ Response `200`:
 
 ### `GET /results/{result_id}?page=1&page_size=100`
 
-分页读取 ResultStore。前端不可依赖聊天回答里的完整行数据，大结果必须通过本接口读取。
+分页读取 ResultStore artifact。前端不可依赖聊天回答里的完整行数据，大结果必须通过本接口读取。
 
 Response `200`:
 
 ```json
 {
   "result_id": "res_abc",
-  "page": 1,
-  "page_size": 100,
-  "total_rows": 1000,
-  "row_count_is_exact": false,
-  "has_more": true,
-  "columns": ["machine_room", "available_count"],
+  "artifact_type": "sql_result",
+  "title": "SQL Result: idc_resources",
+  "source": "execute_sql",
+  "preview": {
+    "kind": "rows",
+    "columns": ["machine_room", "available_count"],
+    "rows": [{"machine_room": "403", "available_count": 12}]
+  },
+  "metrics": {
+    "row_count": 1000,
+    "stored_count": 1000,
+    "count_is_exact": false,
+    "truncated": true
+  },
+  "metadata": {
+    "domain": "idc_resources",
+    "sql": "SELECT ..."
+  },
+  "page": {
+    "number": 1,
+    "size": 100,
+    "offset": 0,
+    "total_rows": 1000,
+    "has_more": true
+  },
   "rows": [
     {"machine_room": "403", "available_count": 12}
   ],
-  "sql": "SELECT ...",
   "download_url": "/results/res_abc.csv"
 }
 ```
 
 ### `GET /results/{result_id}.csv`
 
-导出 ResultStore 中已保存的结果行。
+导出 ResultStore 中已保存的 row-shaped artifact。
 
 Response `200`:
 
@@ -298,7 +316,7 @@ Response `200`:
 
 后端还会额外派生 Web 友好的 SSE 事件：
 
-- `result_created`：从 runtime `result_created` 提炼出 `result_id`、`sample_rows`、`row_count`、`has_more`。
+- `result_created`：从 runtime `result_created` 提炼出标准 ResultStore artifact envelope。
 - `model_delta`：模型输出增量，包含 `kind/stage/title/model/delta` 元信息；后端不判断展示位置。
 - `run_complete`：run 成功结束，包含最终 `answer` 和 `result_ids`。
 - `run_error`：run 失败结束，包含 `error`、`message` 和可选 `diagnostic_run_id`。
@@ -331,7 +349,7 @@ Response `200`:
 
 ### `result_created`
 
-提示前端出现可查看的 ResultStore 结果。
+提示前端出现可查看的 ResultStore artifact。
 
 ```json
 {
@@ -340,9 +358,24 @@ Response `200`:
   "sequence": 5,
   "timestamp": "2026-06-01T10:00:05Z",
   "result_id": "res_abc",
-  "sample_rows": [{"available_count": 12}],
-  "row_count": 1,
-  "has_more": false
+  "result": {
+    "result_id": "res_abc",
+    "artifact_type": "sql_result",
+    "title": "SQL Result: idc_resources",
+    "source": "execute_sql",
+    "preview": {
+      "kind": "rows",
+      "columns": ["available_count"],
+      "rows": [{"available_count": 12}]
+    },
+    "metrics": {
+      "row_count": 1,
+      "stored_count": 1,
+      "count_is_exact": true,
+      "truncated": false
+    },
+    "metadata": {"domain": "idc_resources", "sql": "SELECT ..."}
+  }
 }
 ```
 
@@ -469,9 +502,7 @@ export interface ResultCreatedEvent {
   sequence: number;
   timestamp: string;
   result_id: string;
-  sample_rows: Record<string, unknown>[];
-  row_count: number;
-  has_more: boolean;
+  result: ResultArtifact;
 }
 
 export interface ModelDeltaEvent {
@@ -519,16 +550,33 @@ export type AgentWeaveSseEvent =
 
 export interface ResultPage {
   result_id: string;
-  page: number;
-  page_size: number;
-  total_rows: number;
-  row_count_is_exact: boolean;
-  has_more: boolean;
-  columns: string[];
+  artifact_type: string;
+  title: string;
+  source: string;
+  preview: {
+    kind: "rows";
+    columns: string[];
+    rows: Record<string, unknown>[];
+  };
+  metrics: {
+    row_count: number;
+    stored_count: number;
+    count_is_exact: boolean;
+    truncated: boolean;
+  };
+  metadata: Record<string, unknown>;
+  page: {
+    number: number;
+    size: number;
+    offset: number;
+    total_rows: number;
+    has_more: boolean;
+  };
   rows: Record<string, unknown>[];
-  sql: string;
   download_url?: string;
 }
+
+export type ResultArtifact = Omit<ResultPage, "page" | "rows" | "download_url">;
 
 export interface DiagnosticRun {
   run_id: string;

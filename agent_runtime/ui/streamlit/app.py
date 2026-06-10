@@ -41,15 +41,12 @@ SESSION_DB_PATH = DATA_DIR / "streamlit_sessions.sqlite"
 TEXT2SQL_AGENT_ROOT = ROOT / "subagents" / "text2sql"
 
 # -- Model defaults (hidden from UI) ----------------------------------
-BASE_URL = os.getenv("ORCHESTRATOR_BASE_URL") or os.getenv("QWEN36_BASE_URL", "http://localhost:8000/v1")
-MODEL_NAME = os.getenv("ORCHESTRATOR_MODEL") or os.getenv("QWEN36_MODEL", "qwen3.6-27b")
-MAX_OUTPUT_TOKENS = int(os.getenv("ORCHESTRATOR_MAX_TOKENS", "8192"))
-SQL_BASE_URL = os.getenv("EXECUTOR_BASE_URL", "http://localhost:8001/v1")
-SQL_MODEL_NAME = os.getenv("EXECUTOR_MODEL", "qwen3-32b")
-SQL_MAX_OUTPUT_TOKENS = int(os.getenv("EXECUTOR_MAX_TOKENS", "2048"))
+BASE_URL = os.getenv("CHAT_BASE_URL", "http://localhost:8000/v1")
+MODEL_NAME = os.getenv("CHAT_MODEL", "qwen3.6-27b")
+MAX_OUTPUT_TOKENS = int(os.getenv("CHAT_MAX_TOKENS", "8192"))
 EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "http://localhost:8002/v1")
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "openai-compatible-embedding-model")
-API_KEY = os.getenv("OPENAI_API_KEY", "not-needed")
+API_KEY = os.getenv("CHAT_API_KEY") or os.getenv("OPENAI_API_KEY", "not-needed")
 
 st.set_page_config(page_title="AgentWeave", layout="wide")
 inject_styles()
@@ -82,9 +79,6 @@ sidebar_config = render_sidebar(
     base_url_default=BASE_URL,
     model_name_default=MODEL_NAME,
     max_output_tokens_default=MAX_OUTPUT_TOKENS,
-    sql_base_url_default=SQL_BASE_URL,
-    sql_model_name_default=SQL_MODEL_NAME,
-    sql_max_output_tokens_default=SQL_MAX_OUTPUT_TOKENS,
     embedding_base_url_default=EMBEDDING_BASE_URL,
     embedding_model_name_default=EMBEDDING_MODEL_NAME,
     api_key_default=API_KEY,
@@ -97,9 +91,6 @@ reload_resources_requested = sidebar_config.reload_resources_requested
 base_url = sidebar_config.base_url
 model_name = sidebar_config.model_name
 max_output_tokens = sidebar_config.max_output_tokens
-sql_base_url = sidebar_config.sql_base_url
-sql_model_name = sidebar_config.sql_model_name
-sql_max_output_tokens = sidebar_config.sql_max_output_tokens
 embedding_base_url = sidebar_config.embedding_base_url
 embedding_model_name = sidebar_config.embedding_model_name
 api_key = sidebar_config.api_key
@@ -133,14 +124,11 @@ def get_runtime(
     model_name: str,
     api_key: str,
     max_tokens: int,
-    sql_base_url: str,
-    sql_model_name: str,
-    sql_max_tokens: int,
     embedding_base_url: str,
     embedding_model_name: str,
     memory_enabled: bool,
 ):
-    from agent_runtime.core.orchestrator import AgentRuntime
+    from agent_runtime.core.runtime import AgentRuntime
 
     return AgentRuntime(
         base_url=base_url,
@@ -148,9 +136,6 @@ def get_runtime(
         api_key=api_key,
         session_db_path=SESSION_DB_PATH,
         max_tokens=max_tokens,
-        sql_base_url=sql_base_url,
-        sql_model_name=sql_model_name,
-        sql_max_tokens=sql_max_tokens,
         embedding_base_url=embedding_base_url,
         embedding_model_name=embedding_model_name,
         memory_enabled=memory_enabled,
@@ -195,9 +180,6 @@ def get_configured_runtime():
         model_name=model_name,
         api_key=api_key,
         max_tokens=int(max_output_tokens),
-        sql_base_url=sql_base_url,
-        sql_model_name=sql_model_name,
-        sql_max_tokens=int(sql_max_output_tokens),
         embedding_base_url=embedding_base_url,
         embedding_model_name=embedding_model_name,
         memory_enabled=memory_enabled,
@@ -217,9 +199,6 @@ def get_initial_assistant_message(
     base_url: str,
     model_name: str,
     max_tokens: int,
-    sql_base_url: str,
-    sql_model_name: str,
-    sql_max_tokens: int,
     embedding_base_url: str,
     embedding_model_name: str,
     memory_enabled: bool,
@@ -235,9 +214,6 @@ def get_initial_assistant_message(
             model_name=model_name,
             api_key=api_key,
             max_tokens=max_tokens,
-            sql_base_url=sql_base_url,
-            sql_model_name=sql_model_name,
-            sql_max_tokens=sql_max_tokens,
             embedding_base_url=embedding_base_url,
             embedding_model_name=embedding_model_name,
             memory_enabled=memory_enabled,
@@ -303,9 +279,6 @@ initial_message_signature = (
     base_url,
     model_name,
     max_output_tokens,
-    sql_base_url,
-    sql_model_name,
-    sql_max_output_tokens,
     embedding_base_url,
     embedding_model_name,
     memory_enabled,
@@ -317,9 +290,6 @@ if "messages" not in st.session_state:
         base_url=base_url,
         model_name=model_name,
         max_tokens=max_output_tokens,
-        sql_base_url=sql_base_url,
-        sql_model_name=sql_model_name,
-        sql_max_tokens=sql_max_output_tokens,
         embedding_base_url=embedding_base_url,
         embedding_model_name=embedding_model_name,
         memory_enabled=memory_enabled,
@@ -344,9 +314,6 @@ elif (
         base_url=base_url,
         model_name=model_name,
         max_tokens=max_output_tokens,
-        sql_base_url=sql_base_url,
-        sql_model_name=sql_model_name,
-        sql_max_tokens=sql_max_output_tokens,
         embedding_base_url=embedding_base_url,
         embedding_model_name=embedding_model_name,
         memory_enabled=memory_enabled,
@@ -447,9 +414,6 @@ if prompt:
                     model_name=model_name,
                     api_key=api_key,
                     max_tokens=int(max_output_tokens),
-                    sql_base_url=sql_base_url,
-                    sql_model_name=sql_model_name,
-                    sql_max_tokens=int(sql_max_output_tokens),
                     embedding_base_url=embedding_base_url,
                     embedding_model_name=embedding_model_name,
                     memory_enabled=memory_enabled,
@@ -578,9 +542,6 @@ with results_tab:
             model_name=model_name,
             api_key=api_key,
             max_tokens=int(max_output_tokens),
-            sql_base_url=sql_base_url,
-            sql_model_name=sql_model_name,
-            sql_max_tokens=int(sql_max_output_tokens),
             embedding_base_url=embedding_base_url,
             embedding_model_name=embedding_model_name,
             memory_enabled=memory_enabled,

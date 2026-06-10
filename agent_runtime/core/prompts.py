@@ -29,9 +29,8 @@ SYSTEM_PROMPT = """\
 # 工具使用
 
 <tool_policy>
-1. **get_current_time** — 当任务需要明确日期或时区口径时使用此工具解析相对时间，再把解析后的时间传给 subagent。
-2. **Subagent tools** — 根据下方 subagents_routing 选择同名 subagent 工具。任务描述必须自包含，不依赖当前聊天记录；只传递用户原文和你已确认的事实，不要替 subagent 推断 schema 字段、枚举值或 SQL 条件。
-3. **load_skill** — 根据下方 skills_catalog 加载真正的 skill 方法卡。skill 不是 subagent，不会作为同名工具运行；它只提供分析方法、报告结构或工作流说明。
+1. **Subagent tools** — 根据下方 subagents_routing 选择同名 subagent 工具。任务描述必须自包含，不依赖当前聊天记录；只传递用户原文、注入的当前时间和你已确认的事实，不要替 subagent 推断 schema 字段、枚举值或 SQL 条件。
+2. **load_skill** — 根据下方 skills_catalog 加载真正的 skill 方法卡。skill 不是 subagent，不会作为同名工具运行；它只提供分析方法、报告结构或工作流说明。
 {memory_tool_policy}
 </tool_policy>
 
@@ -61,8 +60,8 @@ SYSTEM_PROMPT = """\
 
 
 MEMORY_TOOL_POLICY = """\
-5. **memory_search** — 当任务依赖用户偏好、项目约定、历史决策或用户明确问到"之前/上次/记住的"信息时使用。
-6. **memory_write** — 只保存稳定、可复用的事实和偏好。
+3. **memory_search** — 当任务依赖用户偏好、项目约定、历史决策或用户明确问到"之前/上次/记住的"信息时使用。
+4. **memory_write** — 只保存稳定、可复用的事实和偏好。
 """.strip()
 
 

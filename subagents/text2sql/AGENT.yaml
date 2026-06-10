@@ -2,10 +2,30 @@ name: text2sql
 description: 使用自然语言查询结构化数据，生成并执行只读 SQL。
 execution:
   mode: worker
-  model_role: orchestrator
   max_turns: 8
 extension:
   module: subagents.text2sql.extension
+capabilities:
+  - db.readonly
+  - schema.inspect
+  - sql.generate
+policies:
+  db:
+    readonly: true
+    max_rows: 1000
+    sample_rows: 50
+    timeout_seconds: 120
+    require_schema_validation: true
+  subagent:
+    allow_recursive_calls: false
+output_contract:
+  format: json
+  required_fields:
+    - answer
+    - artifacts
+    - trace
+  artifact_types:
+    - sql_result
 memory:
   namespaces:
     - project

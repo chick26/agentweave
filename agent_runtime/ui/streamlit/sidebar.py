@@ -21,9 +21,6 @@ class SidebarConfig:
     base_url: str
     model_name: str
     max_output_tokens: int
-    sql_base_url: str
-    sql_model_name: str
-    sql_max_output_tokens: int
     embedding_base_url: str
     embedding_model_name: str
     api_key: str
@@ -36,9 +33,6 @@ def render_sidebar(
     base_url_default: str,
     model_name_default: str,
     max_output_tokens_default: int,
-    sql_base_url_default: str,
-    sql_model_name_default: str,
-    sql_max_output_tokens_default: int,
     embedding_base_url_default: str,
     embedding_model_name_default: str,
     api_key_default: str,
@@ -90,12 +84,12 @@ def render_sidebar(
 
         reload_resources_requested = st.button(
             "Reload Resources",
-            help="重新发现 AGENTS.md、PROJECT.md、Skills、Subagents 和 Domain 配置。",
+            help="重新发现 AGENTS.md、Skills、Subagents 和 Domain 配置。",
             use_container_width=True,
         )
         st.divider()
         with st.expander("模型与连接", expanded=False):
-            st.caption("编排模型")
+            st.caption("Chat 模型")
             base_url = st.text_input("Base URL", value=base_url_default, key="orchestration_base_url").strip() or base_url_default
             model_name = st.text_input("模型名称", value=model_name_default, key="orchestration_model_name").strip() or model_name_default
             max_output_tokens = st.number_input(
@@ -105,19 +99,6 @@ def render_sidebar(
                 value=_clamp_output_tokens(max_output_tokens_default),
                 step=256,
                 key="orchestration_max_output_tokens",
-            )
-
-            st.divider()
-            st.caption("SQL 生成")
-            sql_base_url = st.text_input("SQL Base URL", value=sql_base_url_default, key="sql_base_url").strip() or sql_base_url_default
-            sql_model_name = st.text_input("SQL 模型名称", value=sql_model_name_default, key="sql_model_name").strip() or sql_model_name_default
-            sql_max_output_tokens = st.number_input(
-                "SQL 最大输出 tokens",
-                min_value=MIN_OUTPUT_TOKENS_UI,
-                max_value=MAX_OUTPUT_TOKENS_UI_CAP,
-                value=_clamp_output_tokens(sql_max_output_tokens_default),
-                step=256,
-                key="sql_max_output_tokens",
             )
 
             st.divider()
@@ -136,7 +117,7 @@ def render_sidebar(
                 "API Key",
                 value=api_key_default,
                 type="password",
-                help="会同时用于编排模型、SQL 模型和 Embedding 模型；如果服务不校验，可保持默认值。",
+                help="用于 Chat 模型和 Embedding 模型；如果服务不校验，可保持默认值。",
                 key="api_key",
             ) or api_key_default
 
@@ -149,9 +130,6 @@ def render_sidebar(
         base_url=base_url,
         model_name=model_name,
         max_output_tokens=int(max_output_tokens),
-        sql_base_url=sql_base_url,
-        sql_model_name=sql_model_name,
-        sql_max_output_tokens=int(sql_max_output_tokens),
         embedding_base_url=embedding_base_url,
         embedding_model_name=embedding_model_name,
         api_key=api_key,

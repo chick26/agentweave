@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from agent_runtime.core.result_events import extract_result_metadata
 from agent_runtime.common import to_jsonable
 
 
@@ -592,18 +593,17 @@ def _summarize_run(
     model_calls: list[dict[str, Any]],
     events: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    result_ids: list[str] = []
     execute_count = 0
     for event in events:
         if event.get("stage") == "execute":
             execute_count += 1
-        payload = event.get("payload")
-        if isinstance(payload, dict):
-            event_payload = payload.get("payload")
-            if isinstance(event_payload, dict):
-                output = event_payload.get("output")
-                if isinstance(output, dict) and output.get("result_id"):
-                    result_ids.append(str(output["result_id"]))
+    result_ids = [
+        str(item["result_id"])
+        for item in extract_result_metadata(
+            [_diagnostic_event_to_runtime_event(event) for event in events]
+        )
+        if item.get("result_id")
+    ]
     return {
         "duration_ms": run.get("duration_ms"),
         "model_call_count": run.get("model_call_count"),
@@ -624,6 +624,16 @@ def _summarize_run(
         ),
         "missing_time_count": len(_missing_time_items(model_calls, events)),
     }
+
+
+def _diagnostic_event_to_runtime_event(event: dict[str, Any]) -> dict[str, Any]:
+    payload = event.get("payload")
+    if isinstance(payload, dict) and isinstance(payload.get("payload"), dict):
+        return {
+            "kind": event.get("kind"),
+            "payload": payload.get("payload"),
+        }
+    return event
 
 
 def _read_time_issues(

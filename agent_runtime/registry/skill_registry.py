@@ -14,7 +14,6 @@ from agent_runtime.common import file_signature, split_frontmatter, xml_escape
 @dataclass(frozen=True)
 class ManifestExecution:
     mode: str = "inline"
-    model_role: str = ""
     max_turns: int | None = None
     timeout_seconds: float | None = None
 
@@ -34,7 +33,6 @@ class ManifestDomains:
 class ManifestModel:
     llm: str = ""
     llm_base_url: str = ""
-    embedding_role: str = ""
     embedding: str = ""
     embedding_base_url: str = ""
     extra_body: dict[str, Any] = field(default_factory=dict)
@@ -43,6 +41,14 @@ class ManifestModel:
 @dataclass(frozen=True)
 class ManifestExtension:
     module: str = ""
+
+
+@dataclass(frozen=True)
+class ManifestOutputContract:
+    format: str = ""
+    required_fields: list[str] = field(default_factory=list)
+    artifact_types: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,9 @@ class ManifestBase:
     domains: ManifestDomains = field(default_factory=ManifestDomains)
     model: ManifestModel = field(default_factory=ManifestModel)
     extension: ManifestExtension = field(default_factory=ManifestExtension)
+    capabilities: list[str] = field(default_factory=list)
+    policies: dict[str, Any] = field(default_factory=dict)
+    output_contract: ManifestOutputContract = field(default_factory=ManifestOutputContract)
     routing_hints: list[str] = field(default_factory=list)
     suggested_questions: list[SuggestedQuestion] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -225,6 +234,7 @@ SkillMemory = ManifestMemory
 SkillDomains = ManifestDomains
 SkillModel = ManifestModel
 SkillExtension = ManifestExtension
+SkillOutputContract = ManifestOutputContract
 
 
 def _read_yaml_manifest(
@@ -283,8 +293,9 @@ def _build_manifest_from_metadata(
     domains = metadata.get("domains") if isinstance(metadata.get("domains"), dict) else {}
     model = metadata.get("model") if isinstance(metadata.get("model"), dict) else {}
     extension = metadata.get("extension") if isinstance(metadata.get("extension"), dict) else {}
+    policies = metadata.get("policies", {})
+    output_contract = metadata.get("output_contract", {})
     execution_mode = str(execution.get("mode", "inline"))
-    model_role = str(execution.get("model_role") or "")
     return manifest_cls(
         name=str(metadata.get("name") or default_name),
         description=str(metadata.get("description", "")),
@@ -293,7 +304,6 @@ def _build_manifest_from_metadata(
         body=body,
         execution=ManifestExecution(
             mode=execution_mode,
-            model_role=model_role,
             max_turns=_optional_int(execution.get("max_turns")),
             timeout_seconds=_optional_float(execution.get("timeout_seconds")),
         ),
@@ -306,13 +316,18 @@ def _build_manifest_from_metadata(
         model=ManifestModel(
             llm=str(model.get("llm", "")),
             llm_base_url=str(model.get("llm_base_url", "")),
-            embedding_role=str(model.get("embedding_role", "")),
             embedding=str(model.get("embedding", "")),
             embedding_base_url=str(model.get("embedding_base_url", "")),
             extra_body=_as_dict(model.get("extra_body", {})),
         ),
         extension=ManifestExtension(
             module=str(extension.get("module", "")),
+        ),
+        capabilities=_as_str_list(metadata.get("capabilities", [])),
+        policies=_as_dict_strict(policies, field_name="policies", location=location),
+        output_contract=_as_output_contract(
+            output_contract,
+            location=location,
         ),
         routing_hints=_as_str_list(metadata.get("routing_hints", [])),
         suggested_questions=_as_suggested_questions(
@@ -342,6 +357,30 @@ def _as_str_list(value: Any) -> list[str]:
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _as_dict_strict(value: Any, *, field_name: str, location: Path) -> dict[str, Any]:
+    if value in (None, ""):
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"Invalid manifest {location}: `{field_name}` must be a mapping.")
+    return dict(value)
+
+
+def _as_output_contract(value: Any, *, location: Path) -> ManifestOutputContract:
+    if value in (None, ""):
+        return ManifestOutputContract()
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"Invalid manifest {location}: `output_contract` must be a mapping."
+        )
+    reserved = {"format", "required_fields", "artifact_types"}
+    return ManifestOutputContract(
+        format=str(value.get("format", "")),
+        required_fields=_as_str_list(value.get("required_fields", [])),
+        artifact_types=_as_str_list(value.get("artifact_types", [])),
+        metadata={key: item for key, item in value.items() if key not in reserved},
+    )
 
 
 def _as_suggested_questions(value: Any) -> list[SuggestedQuestion]:
@@ -376,12 +415,12 @@ def _validate_subagent_contract(manifest: ManifestBase) -> None:
         raise ValueError(f"Subagent `{manifest.name}` must provide prompt.md.")
     if manifest.execution.mode != "worker":
         raise ValueError(f"Subagent `{manifest.name}` must set execution.mode: worker.")
-    if not manifest.execution.model_role:
-        raise ValueError(
-            f"Subagent `{manifest.name}` must set execution.model_role for worker execution."
-        )
     execution = manifest.metadata.get("execution")
     execution = execution if isinstance(execution, dict) else {}
+    if "model_role" in execution:
+        raise ValueError(
+            f"Subagent `{manifest.name}` must not use execution.model_role."
+        )
     if "tool_module" in execution or "context_module" in execution or "worker_profile" in execution:
         raise ValueError(
             f"Subagent `{manifest.name}` must use convention paths; "
@@ -394,9 +433,9 @@ def _validate_subagent_contract(manifest: ManifestBase) -> None:
         )
     model = manifest.metadata.get("model")
     model = model if isinstance(model, dict) else {}
-    if "llm_role" in model:
+    if "llm_role" in model or "embedding_role" in model:
         raise ValueError(
-            f"Subagent `{manifest.name}` must use execution.model_role instead of model.llm_role."
+            f"Subagent `{manifest.name}` must not use model role fields."
         )
 
 

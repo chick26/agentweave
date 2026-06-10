@@ -66,7 +66,7 @@ sequenceDiagram
 
 4. **结果持久化与展现阶段（Result Persistence & UI）**：
    * 数据库只读执行后，`execute_sql` 将上限内的查询结果写入本地 `.agentweave/agent_results.sqlite` 的 Result Store。
-   * Worker 通过 `artifacts[type="sql_result"]` 暴露 `result_id`、`stored_row_count`、`has_more` 以及样例数据，防止主模型上下文溢出。
+   * Worker 通过标准 ResultStore artifact envelope 暴露 `result_id`、`preview`、`metrics` 和 `metadata`，防止主模型上下文溢出。
    * Orchestrator 提取关键结论，以简洁的中文呈现给用户；前端 Streamlit 接收 `result_id`，在 "Results" 页签下进行分页数据展示及提供 CSV 导出下载。
 
 ## 运行时机制与扩展
@@ -121,18 +121,15 @@ agentweave/
 │   ├── common.py                  # 通用 helper：时间、XML、frontmatter、identifier 等
 │   ├── core/
 │   │   ├── runtime.py             # AgentRuntime 对外门面
-│   │   ├── agent_factory.py       # 构建 Orchestrator Agent
 │   │   ├── tool_factory.py        # 构建 runtime tools
 │   │   ├── session_manager.py     # SQLiteSession 与上下文压缩
-│   │   ├── run_executor.py        # SDK Runner 执行
 │   │   ├── result_mapper.py       # SDK result/events 到 API payload
-│   │   ├── subagent_runner.py     # SubagentRunner worker 生命周期
 │   │   ├── context.py             # RuntimeContext
 │   │   ├── events.py              # RuntimeEvent / EventBus
 │   │   ├── hooks.py               # HookResult/HookRunner 等核心 hook 机制
 │   │   ├── result_events.py       # 从事件流提取 ResultStore metadata
 │   │   ├── compressor.py          # 上下文压缩与 hard trim
-│   │   ├── model_profiles.py      # 模型角色配置
+│   │   ├── model_profiles.py      # 单 chat 模型配置
 │   │   └── runtime_utils.py       # 模型日志、SQL 提取、时间工具
 │   ├── hooks/                     # AgentWeave 自定义 hook 实现
 │   │   └── session_start.py       # SessionStart welcome hook
@@ -141,24 +138,19 @@ agentweave/
 │   ├── registry/                  # manifest discovery / resource loader
 │   ├── server/                    # HTTP/SSE backend API
 │   └── ui/streamlit/              # Streamlit rendering and session actions
+├── agentweave_prepare/            # 项目级本地环境准备 CLI
 ├── subagents/
 │   ├── text2sql/
 │   │   ├── AGENT.yaml             # subagent 能力元数据、extension/tools 声明
 │   │   ├── prompt.md              # worker prompt 模板
 │   │   ├── extension.py           # Text2SQL extension 注册入口
-│   │   ├── ENVIRONMENT.md         # Text2SQL 本地/生产环境启动说明
-│   │   ├── data/                  # Text2SQL 私有本地 CSV 测试数据
 │   │   ├── domain_catalog.yaml    # Text2SQL table/domain catalog
-│   │   ├── core/                  # domain catalog / SQL generation / SQL safety
-│   │   └── prepare/               # SQLite 构建等离线准备脚本
+│   │   └── core/                  # domain catalog / SQL generation / SQL safety
 │   └── rag/
 │       ├── AGENT.yaml             # RAG 能力元数据、extension 声明
 │       ├── prompt.md              # RAG worker prompt 模板
 │       ├── extension.py           # RAG extension 注册入口
-│       ├── ENVIRONMENT.md         # RAG Markdown index 本地环境启动说明
-│       ├── data/                  # RAG 私有本地 Markdown 测试数据
-│       ├── core/                  # Markdown loader / retrieval / index data structure
-│       └── prepare/               # RAG index 离线构建脚本
+│       └── core/                  # Markdown loader / retrieval / index data structure
 ├── bots/
 │   └── data_analyst/
 │       └── BOT.yaml               # 后端 Bot 配置：挂载能力与欢迎文案
@@ -167,9 +159,11 @@ agentweave/
 │       └── SKILL.md               # loadable data-analysis method card
 ├── docs/
 │   ├── architecture/              # 当前架构说明
+│   ├── environment/               # 数据库、索引等项目级环境准备
 │   └── iterations/                # 架构迭代记录
 ├── data/
-│   └── README.md                  # 全局临时数据目录
+│   ├── README.md                  # 全局临时数据目录
+│   └── examples/                  # 可提交的 demo CSV/Markdown 输入
 └── .agentweave/                   # 本地运行态数据，git ignore
 ```
 
@@ -178,11 +172,11 @@ agentweave/
 新增通用 subagent：
 
 1. 在 `subagents/` 下创建新目录，例如 `subagents/my_agent/`。
-2. 创建 `AGENT.yaml`，声明 `name`、`description`、`execution.mode: worker`、`execution.model_role`、`extension`、`memory` 和 `routing_hints`。内置 worker 默认使用 `orchestrator` 做流程编排；本地可用 `SUBAGENT_<NAME>_MODEL_ROLE` 覆盖。
+2. 创建 `AGENT.yaml`，声明 `name`、`description`、`execution.mode: worker`、`extension`、`capabilities`、`policies`、`output_contract`、`memory` 和 `routing_hints`。worker 和 extension 中的 chat 调用统一使用 runtime 的 `CHAT_*` 模型配置。
 3. 创建 `prompt.md`，作为 worker prompt 模板。
-4. 在 subagent 目录中实现 `extension.py`，暴露 `register(api)`；通过 `api.tool(...)`、`api.validate_environment(...)`、`api.prompt_context(...)` 注册能力。
+4. 在 subagent 目录中实现 `extension.py`，暴露 `register(api)`；通过 `api.tool(...)`、`api.result_formatter(...)`、`api.capability_resolver(...)`、`api.validate_environment(...)`、`api.prompt_context(...)` 注册能力。
 5. 新 subagent 必须统一在 `extension.py register(api)` 中注册工具；`AGENT.yaml tools` legacy 入口已删除。
-6. 如果需要本地准备流程，提供 `ENVIRONMENT.md`、`data/`、`core/` 和 `prepare/`。框架只执行 extension 注册协议，不理解 SQL、Markdown、向量库等业务细节。
+6. 如果需要本地准备流程，把说明、样例数据和 prepare CLI 放到项目级目录，例如 `docs/environment/`、`data/examples/` 和 `agentweave_prepare/`；subagent 内只保留运行时契约和纯业务逻辑。
 7. 可通过环境变量关闭某个 subagent 的 tools，例如 `SUBAGENT_TEXT2SQL_ENABLED=0`。
 
 新增 subagent 只要符合这个 contract，不需要给框架新增专属测试；registry 启动时会校验目录形状。不符合格式就直接报配置错误。
@@ -194,10 +188,7 @@ subagents/<name>/
 ├── AGENT.yaml
 ├── prompt.md
 ├── extension.py      # 必需，register(api)
-├── ENVIRONMENT.md    # 可选，环境准备说明
-├── data/             # 可选，本 subagent 私有测试数据
-├── core/             # 可选，业务纯逻辑
-└── prepare/          # 可选，离线准备脚本
+└── core/             # 可选，业务纯逻辑
 ```
 
 最小 worker subagent manifest 示例：
@@ -207,11 +198,19 @@ name: my_agent
 description: 处理某类专业任务。
 execution:
   mode: worker
-  model_role: orchestrator
   max_turns: 8
   timeout_seconds: 60
 extension:
   module: subagents.my_agent.extension
+capabilities:
+  - my.capability
+policies:
+  subagent:
+    allow_recursive_calls: false
+output_contract:
+  format: json
+  required_fields:
+    - answer
 routing_hints:
   - 何时路由到这个 subagent
 ```
@@ -223,20 +222,20 @@ routing_hints:
 | `name` | 是 | subagent 的唯一名称，也是 Orchestrator 看到的同名委派工具名。建议使用小写 snake_case。 |
 | `description` | 是 | 面向 Orchestrator 的能力描述，用于能力列表、路由判断和欢迎能力摘要。 |
 | `execution.mode` | 是 | 执行模式。subagent 当前应使用 `worker`，表示作为独立 SDK Agent 运行。 |
-| `execution.model_role` | 是 | worker 编排模型角色。内置 subagent 默认用 `orchestrator`，即 qwen3.6；本地可用 `SUBAGENT_<NAME>_MODEL_ROLE` 覆盖。非编排类 LLM 调用应在 extension 内显式使用 `executor`。 |
 | `execution.max_turns` | 否 | worker 单次运行最多 SDK turn 数；不填则使用 `WORKER_MAX_TURNS` 默认值。 |
 | `execution.timeout_seconds` | 否 | worker 单次运行超时时间；不填则使用 `WORKER_TIMEOUT_SECONDS` 默认值。 |
 | `extension.module` | 推荐 | Python 模块路径，运行时会加载其中的 `register(api)`，用于注册工具、环境检查和 prompt context。新 subagent 应使用这个入口。 |
-| `model.embedding_role` | 否 | embedding 模型角色，主要给 RAG 建索引或检索使用，例如 `embedding`。 |
+| `capabilities` | 否 | subagent 拥有的能力包声明，例如 `db.readonly`、`rag.search`，用于治理和审计。 |
+| `policies` | 否 | 能力约束声明，例如行数、超时、schema 白名单、是否允许递归调用 subagent。安全限制仍必须在工具层执行。 |
+| `output_contract` | 否 | worker 输出契约和 artifact 类型声明，例如 `sql_result`、`rag_chunks`。 |
 | `model.embedding` / `model.embedding_base_url` | 否 | 针对该 subagent 覆盖 embedding 模型名或 base URL。 |
-| `model.llm` / `model.llm_base_url` | 否 | 针对 worker 编排模型的局部覆盖。通常不建议内置业务 subagent 使用，优先用 `execution.model_role` 和模型角色配置。 |
-| `model.extra_body` | 否 | 针对该 subagent 的 OpenAI-compatible `extra_body` 覆盖，会合并到角色级 extra body 配置上。 |
 | `memory.namespaces` | 否 | worker prompt 可读取的长期记忆命名空间，例如 `project`、`skill:text2sql`、`subagent:rag`。 |
 | `domains.file` | 否 | subagent 私有 domain catalog 文件名，Text2SQL 用它加载数据域元信息。core 只透传，不理解具体业务 schema。 |
 | `routing_hints` | 推荐 | 给 Orchestrator 的路由提示词。用户问题命中这些意图时，更容易委派到该 subagent。 |
 | `suggested_questions` | 否 | subagent 自己声明的欢迎页预设问题。 |
 
-注意：`model.llm_role` 已废弃，不能再使用；worker LLM 角色统一写在 `execution.model_role`。
+注意：模型角色字段已移除；worker chat 调用统一使用 runtime 的 `CHAT_*` 模型配置。
+ResultFormatter 映射由 subagent 自己的 extension 注册；core 只提供统一 artifact 协议和 registry。
 
 ## 新增 Skill
 
@@ -284,7 +283,7 @@ domains:
       这里写业务口径、过滤规则和值链接提示。
 ```
 
-2. 将本地测试 CSV 放到 `subagents/text2sql/data/`，默认文件名使用 `<table>.csv`，例如 `my_table.csv`。
+2. 将本地测试 CSV 放到 `data/examples/text2sql/`，默认文件名使用 `<table>.csv`，例如 `my_table.csv`。私有数据也可以放在任意项目外目录，并通过 `--csv-root` 指定。
 3. 重新准备本地 SQLite：
 
 ```bash
@@ -319,7 +318,7 @@ Text2SQL 数据库访问是严格前置流程：runtime 不自动加载 CSV、�
 uv run agentweave-prepare-text2sql --overwrite
 ```
 
-该命令会根据 `subagents/text2sql/domain_catalog.yaml` 中的 table 名称，读取 `subagents/text2sql/data/<table>.csv`，构建 `.agentweave/text2sql.sqlite`，并生成 `.agentweave/text2sql.env`：
+该命令会根据 `subagents/text2sql/domain_catalog.yaml` 中的 table 名称，读取 `data/examples/text2sql/<table>.csv`，构建 `.agentweave/text2sql.sqlite`，并生成 `.agentweave/text2sql.env`：
 
 ```bash
 TEXT2SQL_BACKEND=sqlite
@@ -327,6 +326,12 @@ TEXT2SQL_DATABASE_URL=sqlite:////absolute/path/to/.agentweave/text2sql.sqlite
 ```
 
 启动 Streamlit 或 FastAPI 时会自动加载 `.env` 和 `.agentweave/text2sql.env`。如果要连接真实只读 SQLite 数据库，直接编辑 `.agentweave/text2sql.env` 即可。
+
+如需读取其他 CSV 目录：
+
+```bash
+uv run agentweave-prepare-text2sql --csv-root /absolute/or/project/path --overwrite
+```
 
 后端统一执行只读 SQL：仅允许单条 `SELECT` 或只读 `WITH` 查询，禁止写入、DDL、`PRAGMA`、`ATTACH` 等危险语句。
 
@@ -344,15 +349,13 @@ TEXT2SQL_DATABASE_URL=sqlite:////absolute/path/to/.agentweave/text2sql.sqlite
 
 ## 查询结果存储
 
-`execute_sql()` 不再把完整查询结果塞进 worker 上下文，而是写入本地 SQLite `.agentweave/agent_results.sqlite`。Worker 通过 `artifacts[type="sql_result"]` 看到：
+`execute_sql()` 不再把完整查询结果塞进 worker 上下文，而是写入本地 SQLite `.agentweave/agent_results.sqlite`。ResultStore 对外返回标准 artifact envelope：
 
 - `result_id`
-- `row_count` / `stored_row_count`
-- `has_more`
-- `columns`
-- `sample_rows`
-- `sample_size`
-- `truncated`
+- `artifact_type` / `title` / `source`
+- `preview.kind` / `preview.columns` / `preview.rows`
+- `metrics.row_count` / `metrics.stored_count` / `metrics.count_is_exact` / `metrics.truncated`
+- `metadata`，例如 SQL artifact 的 `domain` 和 `sql`
 
 Streamlit 的 `Results` 页签会根据 `result_id` 从 Result Store 分页读取已存储结果，并提供 CSV 下载。
 
@@ -390,11 +393,8 @@ sqlite3 .agentweave/streamlit_sessions.sqlite \
 
 | 角色 | 环境变量 | 默认值 |
 |------|----------|--------|
-| Orchestrator | `ORCHESTRATOR_BASE_URL` / `ORCHESTRATOR_MODEL` | `http://localhost:8000/v1` / `qwen3.6-27b` |
-| Orchestrator context window | `ORCHESTRATOR_CONTEXT_WINDOW` | `32768` |
-| Worker 编排角色覆盖 | `SUBAGENT_<NAME>_MODEL_ROLE` | 默认使用 manifest 中的 `execution.model_role` |
-| 执行类模型 | `EXECUTOR_BASE_URL` / `EXECUTOR_MODEL` | `http://localhost:8001/v1` / `qwen3-32b` |
-| Executor context window | `EXECUTOR_CONTEXT_WINDOW` | `32768` |
+| Chat 模型 | `CHAT_BASE_URL` / `CHAT_MODEL` | `http://localhost:8000/v1` / `qwen3.6-27b` |
+| Chat context window | `CHAT_CONTEXT_WINDOW` | `32768` |
 | Memory embedding | `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` | `http://localhost:8002/v1` / `openai-compatible-embedding-model` |
 
 其他运行时配置：
@@ -409,8 +409,7 @@ MEMORY_ENABLED=1
 MEMORY_EMBEDDING_ENABLED=1
 AGENTWEAVE_ENABLE_TODO_TOOL=0
 AGENTWEAVE_TIMEZONE=Asia/Hong_Kong
-ORCHESTRATOR_EXTRA_BODY_JSON={"chat_template_kwargs":{"enable_thinking":false}}
-EXECUTOR_EXTRA_BODY_JSON={"chat_template_kwargs":{"enable_thinking":false}}
+CHAT_EXTRA_BODY_JSON={"chat_template_kwargs":{"enable_thinking":false}}
 ```
 
 这些变量写入 `.env` 或 `.agentweave/runtime.env` 即可；启动时会自动加载。

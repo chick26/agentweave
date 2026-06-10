@@ -23,7 +23,7 @@ def _write_skill(root: Path, name: str) -> None:
 def _write_subagent(root: Path, name: str) -> None:
     _write(
         root / "subagents" / name / "AGENT.yaml",
-        f"name: {name}\ndescription: {name} subagent\nexecution:\n  mode: worker\n  model_role: orchestrator\n",
+        f"name: {name}\ndescription: {name} subagent\nexecution:\n  mode: worker\n",
     )
     _write(root / "subagents" / name / "prompt.md", "Prompt")
 

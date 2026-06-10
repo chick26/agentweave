@@ -74,7 +74,7 @@ sequenceDiagram
 
 ### 2. Orchestrator 运行入口
 
-`AgentRuntime.ask()` 位于 `agent_runtime/core/orchestrator.py`：
+`AgentRuntime.ask()` 位于 `agent_runtime/core/runtime.py`：
 
 - 打开当前会话的 `SQLiteSession`。
 - 对历史消息做上下文压缩判断。

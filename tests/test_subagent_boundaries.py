@@ -32,6 +32,19 @@ def test_subagents_do_not_import_runtime_internals() -> None:
     assert violations == []
 
 
+def test_subagents_do_not_contain_environment_assets() -> None:
+    violations: list[str] = []
+    for path in sorted(Path("subagents").glob("*")):
+        if not path.is_dir() or path.name.startswith("__"):
+            continue
+        for disallowed in ("ENVIRONMENT.md", "data", "prepare"):
+            candidate = path / disallowed
+            if candidate.exists():
+                violations.append(str(candidate))
+
+    assert violations == []
+
+
 def _is_forbidden(module: str) -> bool:
     return any(
         module == prefix or module.startswith(f"{prefix}.")

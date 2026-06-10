@@ -13,10 +13,16 @@ from agent_runtime.shared.manifest import load_subagent_manifest
 from subagents.text2sql.core.domain_catalog import Text2SQLDomainCatalog
 
 
-def prepare_sqlite_database(*, root: Path, output: Path, overwrite: bool = False) -> Path:
+def prepare_sqlite_database(
+    *,
+    root: Path,
+    output: Path,
+    overwrite: bool = False,
+    csv_root: Path | None = None,
+) -> Path:
     """Build a local SQLite database from Text2SQL domain CSV files."""
     manifest = load_subagent_manifest(root, "text2sql")
-    tables = manifest_csv_tables(root=root, manifest=manifest)
+    tables = manifest_csv_tables(root=root, manifest=manifest, csv_root=csv_root)
     missing = [str(path) for path in tables.values() if not path.exists()]
     if missing:
         raise FileNotFoundError(
@@ -61,9 +67,17 @@ def write_text2sql_env_file(*, root: Path, database_path: Path, env_file: Path) 
     return env_file
 
 
-def manifest_csv_tables(*, root: Path, manifest: Any) -> dict[str, Path]:
+def manifest_csv_tables(
+    *,
+    root: Path,
+    manifest: Any,
+    csv_root: Path | None = None,
+) -> dict[str, Path]:
     """Resolve local CSV files for Text2SQL prepare-time SQLite generation."""
-    data_root = root / "subagents" / "text2sql" / "data"
+    data_root = csv_root or Path("data/examples/text2sql")
+    data_root = data_root.expanduser()
+    if not data_root.is_absolute():
+        data_root = root / data_root
     return {
         domain.table: data_root / f"{domain.table}.csv"
         for domain in Text2SQLDomainCatalog.from_agent(manifest).list_domains()
@@ -152,6 +166,11 @@ def main() -> None:
         help="Env file to write with TEXT2SQL_BACKEND and TEXT2SQL_DATABASE_URL.",
     )
     parser.add_argument(
+        "--csv-root",
+        default="data/examples/text2sql",
+        help="Directory containing <table>.csv files for local SQLite preparation.",
+    )
+    parser.add_argument(
         "--no-env-file",
         action="store_true",
         help="Prepare the database without writing a runtime env file.",
@@ -162,6 +181,7 @@ def main() -> None:
         root=root,
         output=Path(args.output),
         overwrite=bool(args.overwrite),
+        csv_root=Path(args.csv_root),
     )
     print(f"prepared={output}")
     if not args.no_env_file:

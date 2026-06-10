@@ -17,9 +17,6 @@ class RuntimeConfig:
     model_name: str
     api_key: str
     max_tokens: int
-    sql_base_url: str
-    sql_model_name: str
-    sql_max_tokens: int
     embedding_base_url: str
     embedding_model_name: str
     memory_enabled: bool
@@ -60,9 +57,6 @@ def render_result_runs(
         model_name=runtime_config.model_name,
         api_key=runtime_config.api_key,
         max_tokens=runtime_config.max_tokens,
-        sql_base_url=runtime_config.sql_base_url,
-        sql_model_name=runtime_config.sql_model_name,
-        sql_max_tokens=runtime_config.sql_max_tokens,
         embedding_base_url=runtime_config.embedding_base_url,
         embedding_model_name=runtime_config.embedding_model_name,
         memory_enabled=runtime_config.memory_enabled,
@@ -78,16 +72,31 @@ def render_result_runs(
         (item for item in results if item["result_id"] == selected_result_id),
         {},
     )
-    stored_row_count = int(metadata["row_count"])
-    has_more = bool(selected_event_metadata.get("has_more") or selected_event_metadata.get("store_truncated"))
+    artifact_type = str(metadata.get("artifact_type") or "artifact")
+    title = str(metadata.get("title") or artifact_type)
+    metrics = metadata.get("metrics") if isinstance(metadata.get("metrics"), dict) else {}
+    event_metrics = (
+        selected_event_metadata.get("metrics")
+        if isinstance(selected_event_metadata.get("metrics"), dict)
+        else {}
+    )
+    artifact_metadata = metadata.get("metadata") if isinstance(metadata.get("metadata"), dict) else {}
+    stored_row_count = int(metrics.get("stored_count") or metrics.get("row_count") or 0)
+    has_more = bool(event_metrics.get("truncated") or metrics.get("truncated"))
     row_label = f"{stored_row_count}+" if has_more else str(stored_row_count)
     st.markdown(
         f"**result_id** `{metadata['result_id']}` · "
-        f"**domain** `{metadata['domain'] or '-'}` · "
+        f"**type** `{artifact_type}` · "
+        f"**title** `{title}` · "
         f"**stored rows** `{row_label}` · "
         f"**created** `{metadata['created_at']}`"
     )
-    st.code(metadata["sql"], language="sql")
+    if artifact_metadata.get("domain"):
+        st.caption(f"domain: `{artifact_metadata['domain']}`")
+    if artifact_metadata.get("sql"):
+        st.code(str(artifact_metadata["sql"]), language="sql")
+    elif artifact_metadata:
+        st.json(artifact_metadata)
 
     row_count = stored_row_count
     if row_count == 0:
@@ -109,11 +118,12 @@ def render_result_runs(
             key=f"result_page_{selected_result_id}",
         )
         offset = (int(page) - 1) * int(page_size)
-        rows = runtime.result_store.get_page(
+        page_payload = runtime.result_store.get_artifact_page(
             selected_result_id,
             offset=offset,
             limit=int(page_size),
         )
+        rows = page_payload.get("rows") if isinstance(page_payload.get("rows"), list) else []
         total_label = f"{row_count}+ 行已存储" if has_more else f"{row_count} 行"
         st.caption(f"显示第 {offset + 1} - {offset + len(rows)} 行，共 {total_label}。")
         st.dataframe(rows, use_container_width=True, hide_index=True)

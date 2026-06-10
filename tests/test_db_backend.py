@@ -17,7 +17,7 @@ from agent_runtime.storage.database import (
     _coerce_csv_value,
     validate_readonly_sql,
 )
-from subagents.text2sql.prepare.sqlite import manifest_csv_tables
+from agentweave_prepare.text2sql import manifest_csv_tables
 
 
 def test_csv_backend_infers_types_and_executes_numeric_queries(tmp_path):
@@ -122,46 +122,50 @@ def test_sql_database_backend_reads_sqlite_file(tmp_path):
     ]
 
 
-def test_text2sql_extension_connects_csv_backend_from_env(tmp_path, monkeypatch):
-    csv_path = tmp_path / "demo.csv"
-    csv_path.write_text("room\n403\n", encoding="utf-8")
-    monkeypatch.setenv("TEXT2SQL_BACKEND", "csv")
-    monkeypatch.setenv("TEXT2SQL_TABLES_JSON", '{"demo": "demo.csv"}')
+def test_text2sql_extension_connects_sqlite_backend_from_env(tmp_path, monkeypatch):
+    db_path = tmp_path / "demo.sqlite"
+    connection = sqlite3.connect(db_path)
+    connection.execute("CREATE TABLE demo (room TEXT)")
+    connection.execute("INSERT INTO demo VALUES ('403')")
+    connection.commit()
+    connection.close()
+    monkeypatch.setenv("TEXT2SQL_BACKEND", "sqlite")
+    monkeypatch.setenv("TEXT2SQL_DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setattr(text2sql_extension, "_backend_cache", None)
     monkeypatch.setattr(text2sql_extension, "_backend_cache_key", None)
 
-    backend = text2sql_extension._connect_backend(tmp_path)
+    backend = text2sql_extension._connect_backend()
 
     assert backend.get_columns("demo") == ["room"]
 
 
 def test_database_backend_requires_explicit_text2sql_environment(tmp_path, monkeypatch):
     monkeypatch.delenv("TEXT2SQL_BACKEND", raising=False)
-    monkeypatch.delenv("TEXT2SQL_TABLES_JSON", raising=False)
     monkeypatch.delenv("TEXT2SQL_DATABASE_URL", raising=False)
     monkeypatch.setattr(text2sql_extension, "_backend_cache", None)
     monkeypatch.setattr(text2sql_extension, "_backend_cache_key", None)
 
     with pytest.raises(RuntimeError, match="database environment is not prepared"):
-        text2sql_extension._connect_backend(tmp_path)
+        text2sql_extension._connect_backend()
 
 
-def test_csv_backend_requires_explicit_table_config(tmp_path, monkeypatch):
+def test_text2sql_runtime_rejects_csv_backend_mode(monkeypatch):
     monkeypatch.setenv("TEXT2SQL_BACKEND", "csv")
-    monkeypatch.delenv("TEXT2SQL_TABLES_JSON", raising=False)
+    monkeypatch.delenv("TEXT2SQL_DATABASE_URL", raising=False)
     monkeypatch.setattr(text2sql_extension, "_backend_cache", None)
     monkeypatch.setattr(text2sql_extension, "_backend_cache_key", None)
 
-    with pytest.raises(RuntimeError, match="TEXT2SQL_TABLES_JSON is required"):
-        text2sql_extension._connect_backend(tmp_path)
+    with pytest.raises(RuntimeError, match="supports only TEXT2SQL_BACKEND=sqlite"):
+        text2sql_extension._connect_backend()
 
 
 def test_text2sql_prepare_uses_domain_catalog_tables(tmp_path, monkeypatch):
-    monkeypatch.delenv("TEXT2SQL_TABLES_JSON", raising=False)
     subagent_dir = tmp_path / "subagents" / "text2sql"
-    csv_path = subagent_dir / "data" / "resources.csv"
+    csv_root = tmp_path / "data" / "examples" / "text2sql"
+    csv_path = csv_root / "resources.csv"
     csv_path.parent.mkdir(parents=True)
     csv_path.write_text("room\n403\n", encoding="utf-8")
+    subagent_dir.mkdir(parents=True)
     catalog_path = subagent_dir / "domain_catalog.yaml"
     catalog_path.write_text(
         "domains:\n"

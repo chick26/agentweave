@@ -17,7 +17,8 @@ def format_count(value: Any) -> str:
 def format_result_option(result_id: str, results: list[dict[str, Any]]) -> str:
     for item in results:
         if item["result_id"] == result_id:
-            row_count = item.get("stored_row_count", item.get("row_count", 0))
-            suffix = "+" if item.get("has_more") or item.get("store_truncated") else ""
+            metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+            row_count = metrics.get("stored_count", metrics.get("row_count", 0))
+            suffix = "+" if metrics.get("truncated") else ""
             return f"{result_id} · {row_count}{suffix} stored rows"
     return result_id

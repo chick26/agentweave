@@ -17,6 +17,14 @@ def extract_result_metadata(events: list[dict[str, Any]]) -> list[dict[str, Any]
         if not isinstance(payload, dict):
             continue
 
+        result = payload.get("result")
+        if isinstance(result, dict):
+            result_id = result.get("result_id")
+            if result_id and result_id not in seen:
+                seen.add(str(result_id))
+                results.append(_parse_result_dict(result, result_id))
+                continue
+
         # 1. Check result_created event
         if kind == "result_created":
             ui_content = payload.get("ui_content")
@@ -56,30 +64,47 @@ def extract_result_metadata(events: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 def _parse_result_dict(data: dict[str, Any], result_id: Any) -> dict[str, Any]:
+    if isinstance(data.get("preview"), dict) and isinstance(data.get("metrics"), dict):
+        return {
+            "result_id": str(result_id),
+            "artifact_type": str(data.get("artifact_type") or "generic_artifact"),
+            "title": str(data.get("title") or ""),
+            "source": str(data.get("source") or ""),
+            "preview": data.get("preview") or {},
+            "metrics": data.get("metrics") or {},
+            "metadata": data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
+            "created_at": str(data.get("created_at") or ""),
+        }
+
     rows = data.get("sample_rows") or data.get("rows") or []
     if not isinstance(rows, list):
         rows = []
+    columns = data.get("columns") if isinstance(data.get("columns"), list) else []
+    row_count = int(data.get("row_count") or 0)
+    stored_count = int(data.get("stored_row_count") or data.get("row_count") or 0)
+    count_is_exact = coerce_bool(
+        data.get("row_count_is_exact", not data.get("store_truncated"))
+    )
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    if data.get("sql") and "sql" not in metadata:
+        metadata = {**metadata, "sql": str(data.get("sql") or "")}
 
     return {
         "result_id": str(result_id),
-        "row_count": int(data.get("row_count") or 0),
-        "stored_row_count": int(
-            data.get("stored_row_count")
-            or data.get("row_count")
-            or 0
-        ),
-        "columns": data.get("columns")
-        if isinstance(data.get("columns"), list)
-        else [],
-        "sample_rows": rows,
-        "sample_size": int(data.get("sample_size") or len(rows)),
-        "truncated": coerce_bool(data.get("truncated")),
-        "store_truncated": coerce_bool(data.get("store_truncated")),
-        "has_more": coerce_bool(
-            data.get("has_more") or data.get("store_truncated")
-        ),
-        "row_count_is_exact": coerce_bool(
-            data.get("row_count_is_exact", not data.get("store_truncated"))
-        ),
-        "sql": str(data.get("sql") or ""),
+        "artifact_type": str(data.get("artifact_type") or "sql_result"),
+        "title": str(data.get("title") or ""),
+        "source": str(data.get("source") or ""),
+        "preview": {
+            "kind": "rows",
+            "columns": columns,
+            "rows": data.get("preview_rows") if isinstance(data.get("preview_rows"), list) else rows,
+        },
+        "metrics": {
+            "row_count": row_count,
+            "stored_count": stored_count,
+            "count_is_exact": count_is_exact,
+            "truncated": not count_is_exact,
+        },
+        "metadata": metadata,
+        "created_at": str(data.get("created_at") or ""),
     }

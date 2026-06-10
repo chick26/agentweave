@@ -103,8 +103,7 @@ def retrieve(self, query: str, namespaces: list[str], limit: int = 10):
 压缩判断使用独立的上下文窗口配置，不再把 `max_tokens` 混作上下文窗口：
 
 ```bash
-export ORCHESTRATOR_CONTEXT_WINDOW=32768
-export EXECUTOR_CONTEXT_WINDOW=32768
+export CHAT_CONTEXT_WINDOW=32768
 ```
 
 ### 软压缩的 Prompt 设计

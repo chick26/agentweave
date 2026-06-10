@@ -21,7 +21,7 @@ def test_streamlit_formatting_helpers_do_not_require_streamlit_runtime() -> None
     assert format_count(None) == "-"
     assert format_result_option(
         "res_1",
-        [{"result_id": "res_1", "row_count": 3}],
+        [{"result_id": "res_1", "metrics": {"stored_count": 3}}],
     ) == "res_1 · 3 stored rows"
 
 
@@ -103,9 +103,6 @@ def test_streamlit_ui_config_dataclasses_are_plain_values() -> None:
         model_name="model",
         api_key="key",
         max_tokens=1024,
-        sql_base_url="http://sql",
-        sql_model_name="sql",
-        sql_max_tokens=512,
         embedding_base_url="http://embedding",
         embedding_model_name="embedding",
         memory_enabled=True,
@@ -119,9 +116,6 @@ def test_streamlit_ui_config_dataclasses_are_plain_values() -> None:
         base_url=runtime_config.base_url,
         model_name=runtime_config.model_name,
         max_output_tokens=runtime_config.max_tokens,
-        sql_base_url=runtime_config.sql_base_url,
-        sql_model_name=runtime_config.sql_model_name,
-        sql_max_output_tokens=runtime_config.sql_max_tokens,
         embedding_base_url=runtime_config.embedding_base_url,
         embedding_model_name=runtime_config.embedding_model_name,
         api_key=runtime_config.api_key,
@@ -129,7 +123,7 @@ def test_streamlit_ui_config_dataclasses_are_plain_values() -> None:
 
     assert sidebar_config.base_url == runtime_config.base_url
     assert sidebar_config.bot_id == "data_analyst"
-    assert sidebar_config.sql_max_output_tokens == runtime_config.sql_max_tokens
+    assert sidebar_config.max_output_tokens == runtime_config.max_tokens
 
 
 def test_streamlit_sidebar_clamps_output_token_defaults() -> None:

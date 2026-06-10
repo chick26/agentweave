@@ -10,8 +10,7 @@ from pydantic import BaseModel
 from agent_runtime.common import env_bool
 from agent_runtime.core.context import RuntimeContext
 from agent_runtime.core.events import EventKind
-from agent_runtime.core.runtime_utils import get_current_time_payload
-from agent_runtime.core.tool_protocol import ToolOutput
+from agent_runtime.core.tool_helpers import ToolOutput, emit_tool_finish, emit_tool_start
 from agent_runtime.memory.todo_state import TodoItem
 
 
@@ -25,47 +24,6 @@ def build_runtime_tools(runtime: Any, *, bot: Any | None = None) -> list[Any]:
 
     bot = bot or runtime.bot_registry.get("default")
     allowed_skills = set(bot.skills)
-
-    @function_tool
-    async def get_current_time(
-        ctx: RunContextWrapper[RuntimeContext],
-        timezone_name: str = "",
-    ) -> str:
-        """Resolve the current date and time before handling relative-time questions.
-
-        Use this when the user says today, yesterday, this week, this month,
-        recent, current, now, or a similar relative time phrase. Pass an
-        explicit IANA timezone only when the user requests one; otherwise
-        leave timezone_name empty and the application default is used.
-
-        Args:
-            timezone_name: Optional IANA timezone name. Empty means application default.
-        """
-        emit_tool_start(
-            ctx.context,
-            tool_name="get_current_time",
-            input_payload={"timezone_name": timezone_name},
-        )
-        requested_timezone = timezone_name.strip() or runtime.timezone_name
-        try:
-            output = get_current_time_payload(requested_timezone)
-        except ValueError as exc:
-            output = {"timezone": requested_timezone, "error": str(exc)}
-        tool_output = ToolOutput(
-            llm_content=output,
-            ui_content=output,
-            metadata={
-                "tool_name": "get_current_time",
-                "error": output.get("error", "") if isinstance(output, dict) else "",
-            },
-        )
-        emit_tool_finish(
-            ctx.context,
-            tool_name="get_current_time",
-            output=tool_output,
-            status="failed" if tool_output.metadata.get("error") else "completed",
-        )
-        return tool_output.to_llm_json()
 
     @function_tool
     async def memory_search(
@@ -112,19 +70,33 @@ def build_runtime_tools(runtime: Any, *, bot: Any | None = None) -> list[Any]:
             payload=memory_payload,
         )
         output = [record.__dict__ for record in records]
+        result_metadata = _store_runtime_artifact(
+            ctx.context,
+            artifact_type="memory_records",
+            tool_name="memory_search",
+            payload={
+                **memory_payload,
+                "records": output,
+            },
+        )
         tool_output = ToolOutput(
             llm_content=output,
-            ui_content={**memory_payload, "records": output},
+            ui_content={
+                **memory_payload,
+                "records": output,
+                "result_id": result_metadata.get("result_id", ""),
+            },
             metadata={
                 "tool_name": "memory_search",
                 "count": len(records),
+                "result_id": result_metadata.get("result_id", ""),
                 "error": result.error,
             },
         )
         emit_tool_finish(
             ctx.context,
             tool_name="memory_search",
-            output=tool_output,
+            tool_output=tool_output,
             status="failed" if result.error else "completed",
         )
         return tool_output.to_llm_json()
@@ -179,7 +151,7 @@ def build_runtime_tools(runtime: Any, *, bot: Any | None = None) -> list[Any]:
             ui_content={**output, "tags": tag_list},
             metadata={"tool_name": "memory_write", "error": ""},
         )
-        emit_tool_finish(ctx.context, tool_name="memory_write", output=tool_output)
+        emit_tool_finish(ctx.context, tool_name="memory_write", tool_output=tool_output)
         return tool_output.to_llm_json()
 
     @function_tool
@@ -242,7 +214,7 @@ def build_runtime_tools(runtime: Any, *, bot: Any | None = None) -> list[Any]:
         emit_tool_finish(
             ctx.context,
             tool_name="load_skill",
-            output=tool_output,
+            tool_output=tool_output,
             status="failed" if payload.get("error") else "completed",
         )
         return tool_output.to_llm_json()
@@ -294,13 +266,12 @@ def build_runtime_tools(runtime: Any, *, bot: Any | None = None) -> list[Any]:
         emit_tool_finish(
             ctx.context,
             tool_name="update_todo",
-            output=tool_output,
+            tool_output=tool_output,
             status="failed" if payload.get("error") else "completed",
         )
         return tool_output.to_llm_json()
 
     tools = [
-        get_current_time,
         load_skill,
         *_build_subagent_agent_tools(runtime, bot=bot),
     ]
@@ -311,56 +282,40 @@ def build_runtime_tools(runtime: Any, *, bot: Any | None = None) -> list[Any]:
     return tools
 
 
-def emit_tool_start(
-    context: RuntimeContext,
+def _store_runtime_artifact(
+    run_ctx: RuntimeContext,
     *,
+    artifact_type: str,
     tool_name: str,
-    input_payload: dict[str, Any],
-) -> None:
-    context.emit_payload(
-        kind=EventKind.TOOL_CALL_START,
-        run_id=context.session_id,
-        payload={
-            "stage": "tool_call_start",
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if run_ctx.result_store is None or run_ctx.result_formatters is None:
+        return {}
+    artifact = run_ctx.result_formatters.format(
+        artifact_type,
+        {
+            **payload,
+            "artifact_type": artifact_type,
             "tool_name": tool_name,
-            "input": input_payload,
+            "source": tool_name,
         },
     )
-
-
-def emit_tool_finish(
-    context: RuntimeContext,
-    *,
-    tool_name: str,
-    output: ToolOutput,
-    status: str = "completed",
-) -> None:
-    error = str(output.metadata.get("error") or "")
-    payload = {
-        "stage": "tool_result",
-        "tool_name": tool_name,
-        "status": status,
-        "ui_content": output.ui_content,
-        "metadata": output.metadata,
-        "error": error,
-    }
-    context.emit_payload(
-        kind=EventKind.TOOL_RESULT,
-        run_id=context.session_id,
-        payload=payload,
-        error=error,
+    result_id = run_ctx.result_store.create_artifact(
+        run_id=run_ctx.run_id,
+        artifact=artifact,
     )
-    context.emit_payload(
-        kind=EventKind.TOOL_CALL_END,
-        run_id=context.session_id,
+    result = run_ctx.result_store.get_metadata(result_id)
+    run_ctx.emit_payload(
+        kind=EventKind.RESULT_CREATED,
         payload={
-            "stage": "tool_call_end",
+            "stage": "result_created",
             "tool_name": tool_name,
-            "status": status,
-            "error": error,
+            "ui_content": result,
+            "metadata": result.get("metadata", {}),
+            "result": result,
         },
-        error=error,
     )
+    return result
 
 
 def _build_subagent_agent_tools(runtime: Any, *, bot: Any) -> list[Any]:
@@ -371,14 +326,10 @@ def _build_subagent_agent_tools(runtime: Any, *, bot: Any) -> list[Any]:
             continue
         if manifest.execution.mode != "worker":
             continue
-        profile = runtime.subagent_runner.resolve_worker_profile(
-            manifest,
-            model_profiles=runtime.model_profiles,
-        )
         tools.append(
             runtime.subagent_runner.build_worker_agent_tool(
                 manifest=manifest,
-                profile=profile,
+                profile=runtime.model_profile,
             )
         )
     return tools

@@ -28,7 +28,7 @@ class ManifestBase:
     
     # 针对 Subagent 的执行配置
     execution: ManifestExecution  
-    # 包含：mode, model_role, max_turns, timeout
+    # 包含：mode, max_turns, timeout
     
     tools: list[str]       # 已废弃；Subagent 工具统一通过 extension.py 注册
     memory: ManifestMemory # 该组件需要的 memory namespace
@@ -41,9 +41,10 @@ class ManifestBase:
 
 在系统启动时，这两个 Registry 会去读取对应目录下的配置文件。Subagent 固定采用
 `AGENT.yaml` 声明元数据，`prompt.md` 存放 worker prompt，`extension.py register(api)`
-作为工具、环境检查和 prompt context 的唯一标准入口。
-Subagent 可额外提供 `ENVIRONMENT.md` 说明本地测试环境、生产连接方式和所需环境变量；
-该文件只面向开发/运维，不进入模型上下文。
+作为工具、ResultFormatter、capability resolver、环境检查和 prompt context 的唯一标准入口。
+`capabilities`、`policies` 和 `output_contract` 是 subagent 的治理声明；框架只透传，实际业务策略仍由 extension/tool 执行。
+本地测试环境、生产连接方式和所需环境变量统一放在项目级 `docs/environment/`，
+不放入 subagent 包，也不进入模型上下文。
 
 ## AgentRegistry 与意图路由
 
@@ -66,12 +67,11 @@ Subagent 可额外提供 `ENVIRONMENT.md` 说明本地测试环境、生产连�
 
 当主循环运行时，Orchestrator 手里拿着这么一套工具：
 
-1. **`get_current_time`**：时间锚点。当用户说“今天/最近/本周”时，模型必须先调它把相对时间换算成绝对日期，再往下传。
-2. **`memory_search`**：查询持久记忆。支持级联退化（向量 -> 词法 -> 最近）。
-3. **`memory_write`**：写入持久记忆。基于 `(namespace, key)` 自动 Upsert 更新。
-4. **`load_skill`**：按需加载 `SKILL.md` 的完整正文（方法卡），注入当前上下文。
-5. **`update_todo`**：会话内短时规划，一次只能有一个 `in_progress` 的任务。
-6. **动态 Worker 工具**：比如 `text2sql`、`rag`。
+1. **`memory_search`**：查询持久记忆。支持级联退化（向量 -> 词法 -> 最近）。
+2. **`memory_write`**：写入持久记忆。基于 `(namespace, key)` 自动 Upsert 更新。
+3. **`load_skill`**：按需加载 `SKILL.md` 的完整正文（方法卡），注入当前上下文。
+4. **`update_todo`**：会话内短时规划，一次只能有一个 `in_progress` 的任务。
+5. **动态 Worker 工具**：比如 `text2sql`、`rag`。
 
 ## Agent-as-Tool：用工具包裹 Agent
 

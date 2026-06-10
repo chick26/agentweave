@@ -9,6 +9,7 @@ from agent_runtime.registry.skill_registry import (
     ManifestExtension,
     ManifestMemory,
     ManifestModel,
+    ManifestOutputContract,
 )
 
 
@@ -24,5 +25,6 @@ __all__ = [
     "ManifestExtension",
     "ManifestMemory",
     "ManifestModel",
+    "ManifestOutputContract",
     "load_subagent_manifest",
 ]

@@ -55,7 +55,7 @@ from agent_runtime import AgentRuntime
 内部代码使用分层路径，例如：
 
 ```python
-from agent_runtime.core.orchestrator import AgentRuntime
+from agent_runtime.core.runtime import AgentRuntime
 from agent_runtime.core.context import RunContext
 from agent_runtime.storage.database import CsvSQLiteBackend
 from agent_runtime.memory.memory_manager import MemoryManager

@@ -34,6 +34,9 @@
 
 # 运行时上下文
 
+当前时间：
+{current_time}
+
 可用数据域：
 {domains}
 

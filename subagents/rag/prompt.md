@@ -20,6 +20,9 @@
 4. 如果多个片段互相矛盾，说明冲突并列出来源。
 </rag_workflow>
 
+当前时间：
+{current_time}
+
 相关记忆：
 {memory}
 

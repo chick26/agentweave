@@ -32,12 +32,6 @@ class EventKind(str, Enum):
     ERROR = "error"
 
 
-_LEGACY_KIND_MAP = {
-    "memory_search": EventKind.MEMORY_READ,
-    "memory_write": EventKind.MEMORY_WRITE,
-}
-
-
 @dataclass(frozen=True)
 class RuntimeEvent:
     kind: str | EventKind
@@ -75,7 +69,6 @@ class EventBus:
         self.callbacks = list(callbacks or [])
         if callback is not None and callback not in self.callbacks:
             self.callbacks.append(callback)
-        self.callback = callback
         self._sequence = _max_sequence(self.events)
 
     def subscribe(self, callback: Callable[[dict[str, Any]], None]) -> None:
@@ -84,8 +77,6 @@ class EventBus:
 
     def unsubscribe(self, callback: Callable[[dict[str, Any]], None]) -> None:
         self.callbacks = [item for item in self.callbacks if item != callback]
-        if self.callback == callback:
-            self.callback = self.callbacks[0] if self.callbacks else None
 
     def emit(
         self,
@@ -170,9 +161,7 @@ def _normalize_event_dict(event: dict[str, Any], sequence: int) -> dict[str, Any
 
 
 def _normalize_kind(kind: str | EventKind) -> str:
-    kind_value = _kind_value(kind)
-    mapped = _LEGACY_KIND_MAP.get(kind_value)
-    return _kind_value(mapped) if mapped else kind_value
+    return _kind_value(kind)
 
 
 def _kind_value(kind: str | EventKind) -> str:
