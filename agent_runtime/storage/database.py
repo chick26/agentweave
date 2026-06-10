@@ -6,6 +6,7 @@ import csv
 import re
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -59,7 +60,12 @@ class DatabaseBackend(Protocol):
         """
         ...
 
-    def execute_sql(self, sql: str, max_rows: int = 100) -> list[dict[str, Any]]:
+    def execute_sql(
+        self,
+        sql: str,
+        max_rows: int = 100,
+        timeout_seconds: float | None = None,
+    ) -> list[dict[str, Any]]:
         """Execute a single read-only SQL query and return result rows as dicts."""
         ...
 
@@ -156,16 +162,29 @@ class CsvSQLiteBackend:
             cursor = self._connection.execute(sql, (pattern, limit))
             return [(str(row[0]), row[1]) for row in cursor.fetchall() if row[0] is not None]
 
-    def execute_sql(self, sql: str, max_rows: int = 100) -> list[dict[str, Any]]:
+    def execute_sql(
+        self,
+        sql: str,
+        max_rows: int = 100,
+        timeout_seconds: float | None = None,
+    ) -> list[dict[str, Any]]:
         clean_sql = _normalize_sql(sql)
         validate_readonly_sql(clean_sql)
         with self._lock:
+            deadline = _sqlite_progress_deadline(timeout_seconds)
+            if deadline is not None:
+                self._connection.set_progress_handler(_sqlite_timeout_handler(deadline), 1000)
             try:
                 self._connection.execute(f"EXPLAIN {clean_sql}")
                 cursor = self._connection.execute(clean_sql)
                 rows = [dict(row) for row in cursor.fetchmany(max_rows)]
             except sqlite3.Error as exc:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError(f"SQL query timed out after {timeout_seconds:g}s.") from exc
                 raise ValueError(str(exc)) from exc
+            finally:
+                if deadline is not None:
+                    self._connection.set_progress_handler(None, 0)
         return rows
 
     def get_schema_for_prompt(
@@ -240,16 +259,29 @@ class SqlDatabaseBackend:
             cursor = self._connection.execute(sql, (pattern, limit))
             return [(str(row[0]), row[1]) for row in cursor.fetchall() if row[0] is not None]
 
-    def execute_sql(self, sql: str, max_rows: int = 100) -> list[dict[str, Any]]:
+    def execute_sql(
+        self,
+        sql: str,
+        max_rows: int = 100,
+        timeout_seconds: float | None = None,
+    ) -> list[dict[str, Any]]:
         clean_sql = _normalize_sql(sql)
         validate_readonly_sql(clean_sql)
         with self._lock:
+            deadline = _sqlite_progress_deadline(timeout_seconds)
+            if deadline is not None:
+                self._connection.set_progress_handler(_sqlite_timeout_handler(deadline), 1000)
             try:
                 self._connection.execute(f"EXPLAIN {clean_sql}")
                 cursor = self._connection.execute(clean_sql)
                 rows = [dict(row) for row in cursor.fetchmany(max_rows)]
             except sqlite3.Error as exc:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError(f"SQL query timed out after {timeout_seconds:g}s.") from exc
                 raise ValueError(str(exc)) from exc
+            finally:
+                if deadline is not None:
+                    self._connection.set_progress_handler(None, 0)
         return rows
 
     def get_schema_for_prompt(
@@ -317,6 +349,25 @@ def _ensure_single_statement(sql: str) -> None:
         raise ValueError("Only one SQL statement is allowed")
     if len(semicolon_positions) > 1:
         raise ValueError("Only one SQL statement is allowed")
+
+
+def _sqlite_progress_deadline(timeout_seconds: float | None) -> float | None:
+    if timeout_seconds is None:
+        return None
+    try:
+        seconds = float(timeout_seconds)
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    return time.monotonic() + seconds
+
+
+def _sqlite_timeout_handler(deadline: float):
+    def handler() -> int:
+        return 1 if time.monotonic() >= deadline else 0
+
+    return handler
 
 
 def _semicolon_positions_outside_strings(sql: str) -> list[int]:

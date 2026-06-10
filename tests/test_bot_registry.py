@@ -80,6 +80,37 @@ def test_bot_registry_generates_default_when_no_bot_files(tmp_path: Path) -> Non
     assert bot.skills == ["data_analysis"]
 
 
+def test_bot_registry_disables_generated_default_in_production(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_skill(tmp_path, "data_analysis")
+    _write_subagent(tmp_path, "text2sql")
+    monkeypatch.setenv("AGENTWEAVE_ENV", "production")
+    monkeypatch.delenv("AGENTWEAVE_ALLOW_GENERATED_DEFAULT_BOT", raising=False)
+
+    registry = _registry(tmp_path)
+
+    assert registry.discover() == []
+    with pytest.raises(ValueError, match="Unknown bot"):
+        registry.get("default")
+
+
+def test_bot_registry_allows_generated_default_in_production_when_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_skill(tmp_path, "data_analysis")
+    _write_subagent(tmp_path, "text2sql")
+    monkeypatch.setenv("AGENTWEAVE_ENV", "production")
+    monkeypatch.setenv("AGENTWEAVE_ALLOW_GENERATED_DEFAULT_BOT", "1")
+
+    bot = _registry(tmp_path).get("default")
+
+    assert bot.generated is True
+    assert bot.subagents == ["text2sql"]
+
+
 def test_bot_registry_rejects_unknown_resources(tmp_path: Path) -> None:
     _write(
         tmp_path / "bots" / "broken" / "BOT.yaml",

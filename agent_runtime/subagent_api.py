@@ -162,6 +162,8 @@ class SubagentContext:
             return ""
         result_id = result_store.create_result(
             run_id=self._ctx.run_id,
+            session_id=self._ctx.session_id,
+            bot_id=self._ctx.bot_id,
             domain=domain,
             sql=sql,
             rows=rows,
@@ -206,8 +208,15 @@ class SubagentContext:
         result_id = result_store.create_artifact(
             run_id=self._ctx.run_id,
             artifact=artifact,
+            session_id=self._ctx.session_id,
+            bot_id=self._ctx.bot_id,
         )
-        result = result_store.get_metadata(result_id)
+        result = result_store.get_metadata(
+            result_id,
+            run_id=self._ctx.run_id,
+            session_id=self._ctx.session_id,
+            bot_id=self._ctx.bot_id,
+        )
         if tool_name:
             self.result_created(
                 tool_name=tool_name,

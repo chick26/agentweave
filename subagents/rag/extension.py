@@ -30,8 +30,8 @@ RAG_ENVIRONMENT_ERROR = (
 
 def register(api: Any) -> None:
     api.result_formatter(RagChunksFormatter())
-    api.tool(search_knowledge_base)
-    api.tool(get_knowledge_base_summary)
+    api.tool(search_knowledge_base, capability="rag.search", policy_path="rag", audit_name="rag.search")
+    api.tool(get_knowledge_base_summary, capability="rag.search", policy_path="rag", audit_name="rag.summary")
     api.validate_environment(validate_environment)
 
 

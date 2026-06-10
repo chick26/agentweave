@@ -133,11 +133,19 @@ def create_app(
     @app.get("/results/{result_id}.csv", dependencies=[Depends(require_auth)])
     def export_result_csv(
         result_id: str,
+        run_id: str = "",
+        session_id: str = "",
+        bot_id: str = "",
         service: AgentService = Depends(current_service),
     ) -> Response:
         try:
             return Response(
-                content=service.export_result_csv(result_id),
+                content=service.export_result_csv(
+                    result_id,
+                    run_id=run_id,
+                    session_id=session_id,
+                    bot_id=bot_id,
+                ),
                 media_type="text/csv; charset=utf-8",
             )
         except KeyError as exc:
@@ -148,10 +156,20 @@ def create_app(
         result_id: str,
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=100, ge=1),
+        run_id: str = "",
+        session_id: str = "",
+        bot_id: str = "",
         service: AgentService = Depends(current_service),
     ) -> dict[str, Any]:
         try:
-            return service.get_result_page(result_id, page=page, page_size=page_size)
+            return service.get_result_page(
+                result_id,
+                page=page,
+                page_size=page_size,
+                run_id=run_id,
+                session_id=session_id,
+                bot_id=bot_id,
+            )
         except KeyError as exc:
             raise _not_found(exc) from exc
 

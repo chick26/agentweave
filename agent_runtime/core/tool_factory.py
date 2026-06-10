@@ -303,8 +303,15 @@ def _store_runtime_artifact(
     result_id = run_ctx.result_store.create_artifact(
         run_id=run_ctx.run_id,
         artifact=artifact,
+        session_id=run_ctx.session_id,
+        bot_id=run_ctx.bot_id,
     )
-    result = run_ctx.result_store.get_metadata(result_id)
+    result = run_ctx.result_store.get_metadata(
+        result_id,
+        run_id=run_ctx.run_id,
+        session_id=run_ctx.session_id,
+        bot_id=run_ctx.bot_id,
+    )
     run_ctx.emit_payload(
         kind=EventKind.RESULT_CREATED,
         payload={

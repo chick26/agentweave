@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -71,7 +72,7 @@ class BotRegistry:
         if self._cache is not None and self._cache_signature == signature:
             return list(self._cache)
         bots = [_read_bot(path) for path in paths]
-        if not any(bot.id == "default" for bot in bots):
+        if not any(bot.id == "default" for bot in bots) and _allow_generated_default_bot():
             bots.insert(0, self._default_bot())
         self._validate(bots)
         self._cache = bots
@@ -184,3 +185,10 @@ def _as_bool(value: Any, *, default: bool) -> bool:
     if text in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _allow_generated_default_bot() -> bool:
+    env_name = os.getenv("AGENTWEAVE_ENV", "").strip().lower()
+    if env_name not in {"production", "prod"}:
+        return True
+    return _as_bool(os.getenv("AGENTWEAVE_ALLOW_GENERATED_DEFAULT_BOT"), default=False)

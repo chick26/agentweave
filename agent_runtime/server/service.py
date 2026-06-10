@@ -239,6 +239,9 @@ class AgentService:
         *,
         page: int = 1,
         page_size: int = 100,
+        run_id: str = "",
+        session_id: str = "",
+        bot_id: str = "",
     ) -> dict[str, Any]:
         page = max(1, int(page))
         page_size = min(1000, max(1, int(page_size)))
@@ -247,6 +250,9 @@ class AgentService:
             result_id,
             offset=offset,
             limit=page_size,
+            run_id=run_id,
+            session_id=session_id,
+            bot_id=bot_id,
         )
         metrics = artifact.get("metrics") if isinstance(artifact.get("metrics"), dict) else {}
         total_rows = int(metrics.get("stored_count") or metrics.get("row_count") or 0)
@@ -264,8 +270,20 @@ class AgentService:
             "download_url": f"/results/{result_id}.csv",
         }
 
-    def export_result_csv(self, result_id: str) -> bytes:
-        return self.runtime.result_store.export_csv(result_id)
+    def export_result_csv(
+        self,
+        result_id: str,
+        *,
+        run_id: str = "",
+        session_id: str = "",
+        bot_id: str = "",
+    ) -> bytes:
+        return self.runtime.result_store.export_csv(
+            result_id,
+            run_id=run_id,
+            session_id=session_id,
+            bot_id=bot_id,
+        )
 
     def get_diagnostic(self, run_id: str) -> dict[str, Any]:
         return self.diagnostic_store.get_run(run_id)

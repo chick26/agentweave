@@ -81,7 +81,9 @@ def test_readonly_sql_validation_blocks_mutation_and_multi_statement():
     blocked_sql = [
         "DELETE FROM resources",
         "SELECT * FROM resources; DROP TABLE resources",
+        "SELECT * FROM resources; ATTACH DATABASE 'other.db' AS other",
         "PRAGMA table_info(resources)",
+        "ATTACH DATABASE 'other.db' AS other",
         "WITH deleted AS (DELETE FROM resources RETURNING *) SELECT * FROM deleted",
     ]
     for sql in blocked_sql:
@@ -120,6 +122,25 @@ def test_sql_database_backend_reads_sqlite_file(tmp_path):
     assert backend.execute_sql("SELECT SUM(available_count) AS total FROM resources") == [
         {"total": 17}
     ]
+
+
+def test_sql_database_backend_enforces_query_timeout(tmp_path):
+    db_path = tmp_path / "demo.db"
+    connection = sqlite3.connect(db_path)
+    connection.execute("CREATE TABLE resources (value INTEGER)")
+    connection.execute("INSERT INTO resources VALUES (1)")
+    connection.commit()
+    connection.close()
+
+    backend = SqlDatabaseBackend(f"sqlite:////{db_path.as_posix().lstrip('/')}")
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        backend.execute_sql(
+            "WITH RECURSIVE cnt(x) AS ("
+            "SELECT 0 UNION ALL SELECT x + 1 FROM cnt WHERE x < 100000000"
+            ") SELECT SUM(x) AS total FROM cnt",
+            timeout_seconds=0.000001,
+        )
 
 
 def test_text2sql_extension_connects_sqlite_backend_from_env(tmp_path, monkeypatch):

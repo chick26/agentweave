@@ -61,17 +61,22 @@ def render_result_runs(
         embedding_model_name=runtime_config.embedding_model_name,
         memory_enabled=runtime_config.memory_enabled,
     )
-    try:
-        metadata = runtime.result_store.get_metadata(selected_result_id)
-    except KeyError:
-        st.error("Result Store 中找不到这个 result_id，可能是本地结果库被清理或运行配置已切换。")
-        st.json(next(item for item in results if item["result_id"] == selected_result_id))
-        return
-
     selected_event_metadata = next(
         (item for item in results if item["result_id"] == selected_result_id),
         {},
     )
+    scope = {
+        "run_id": str(selected_event_metadata.get("run_id") or selected_run.get("run_id") or ""),
+        "session_id": str(selected_event_metadata.get("session_id") or selected_run.get("session_id") or ""),
+        "bot_id": str(selected_event_metadata.get("bot_id") or selected_run.get("bot_id") or ""),
+    }
+    try:
+        metadata = runtime.result_store.get_metadata(selected_result_id, **scope)
+    except KeyError:
+        st.error("Result Store 无法读取这个 result_id，可能是结果已清理、运行配置已切换，或事件缺少访问 scope。")
+        st.json(next(item for item in results if item["result_id"] == selected_result_id))
+        return
+
     artifact_type = str(metadata.get("artifact_type") or "artifact")
     title = str(metadata.get("title") or artifact_type)
     metrics = metadata.get("metrics") if isinstance(metadata.get("metrics"), dict) else {}
@@ -122,6 +127,7 @@ def render_result_runs(
             selected_result_id,
             offset=offset,
             limit=int(page_size),
+            **scope,
         )
         rows = page_payload.get("rows") if isinstance(page_payload.get("rows"), list) else []
         total_label = f"{row_count}+ 行已存储" if has_more else f"{row_count} 行"
@@ -130,7 +136,7 @@ def render_result_runs(
 
     st.download_button(
         "下载已存储 CSV",
-        data=runtime.result_store.export_csv(selected_result_id),
+        data=runtime.result_store.export_csv(selected_result_id, **scope),
         file_name=f"{selected_result_id}.csv",
         mime="text/csv",
         use_container_width=True,

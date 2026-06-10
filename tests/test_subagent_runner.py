@@ -178,7 +178,7 @@ def test_worker_subagent_loads_extension_tools_from_public_subagent_api(tmp_path
         "def resolve_capabilities(manifest):\n"
         "    return {'capabilities': manifest.capabilities, 'policy': manifest.policies.get('demo', {})}\n\n"
         "def register(api):\n"
-        "    api.tool(extension_tool)\n"
+        "    api.tool(extension_tool, capability='demo.capability')\n"
         "    api.prompt_context(build_prompt_context)\n"
         "    api.result_formatter(DemoFormatter())\n"
         "    api.capability_resolver(resolve_capabilities)\n",
@@ -220,6 +220,163 @@ def test_worker_subagent_loads_extension_tools_from_public_subagent_api(tmp_path
     }
 
 
+def test_extension_tool_policy_metadata_is_registered(tmp_path, monkeypatch):
+    subagents_root = tmp_path / "subagents"
+    subagent_dir = subagents_root / "policy_worker"
+    subagent_dir.mkdir(parents=True)
+    (subagent_dir / "extension.py").write_text(
+        "async def scoped_tool(value: str) -> dict:\n"
+        "    return {'value': value, 'error': ''}\n\n"
+        "def register(api):\n"
+        "    api.tool(scoped_tool, capability='demo.query', policy_path='demo', audit_name='demo.audit')\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "AGENT.yaml").write_text(
+        "name: policy_worker\n"
+        "description: Policy worker.\n"
+        "execution:\n"
+        "  mode: worker\n"
+        "extension:\n"
+        "  module: subagents.policy_worker.extension\n"
+        "capabilities:\n"
+        "  - demo.query\n"
+        "policies:\n"
+        "  demo:\n"
+        "    max_rows: 2\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "prompt.md").write_text("Policy worker prompt.\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    registry = AgentRegistry(subagents_root=subagents_root)
+    manifest = registry.get("policy_worker")
+
+    extension = load_subagent_extension(manifest)
+
+    assert extension.tool_policies["scoped_tool"].capability == "demo.query"
+    assert extension.tool_policies["scoped_tool"].policy_path == "demo"
+    assert extension.tool_policies["scoped_tool"].audit_name == "demo.audit"
+    runner = SubagentRunner(registry=registry, root=tmp_path)
+    tool = runner._build_subagent_tools(manifest)[0]
+    context = RuntimeContext(
+        run_id="policy-run",
+        session_id="policy-session",
+        model_profile=_model_profile(),
+        agent_registry=registry,
+        active_subagent="policy_worker",
+    )
+
+    asyncio.run(
+        tool.on_invoke_tool(
+            ToolContext(
+                context=context,
+                tool_name="scoped_tool",
+                tool_call_id="call_scoped",
+                tool_arguments=json.dumps({"value": "hello"}),
+            ),
+            json.dumps({"value": "hello"}),
+        )
+    )
+
+    start_payload = context.events[0]["payload"]
+    result_payload = context.events[1]["payload"]
+    assert start_payload["capability"] == "demo.query"
+    assert start_payload["policy_path"] == "demo"
+    assert start_payload["policy_snapshot"] == {"max_rows": 2}
+    assert result_payload["metadata"]["audit_name"] == "demo.audit"
+
+
+def test_extension_tool_policy_rejects_unknown_capability(tmp_path, monkeypatch):
+    subagents_root = tmp_path / "subagents"
+    subagent_dir = subagents_root / "bad_capability_worker"
+    subagent_dir.mkdir(parents=True)
+    (subagent_dir / "extension.py").write_text(
+        "async def scoped_tool() -> dict:\n"
+        "    return {'error': ''}\n\n"
+        "def register(api):\n"
+        "    api.tool(scoped_tool, capability='missing.capability')\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "AGENT.yaml").write_text(
+        "name: bad_capability_worker\n"
+        "description: Bad worker.\n"
+        "execution:\n"
+        "  mode: worker\n"
+        "extension:\n"
+        "  module: subagents.bad_capability_worker.extension\n"
+        "capabilities:\n"
+        "  - demo.query\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "prompt.md").write_text("Bad worker prompt.\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    with pytest.raises(ValueError, match="unknown capability"):
+        load_subagent_extension(AgentRegistry(subagents_root=subagents_root).get("bad_capability_worker"))
+
+
+def test_extension_tool_policy_requires_capability(tmp_path, monkeypatch):
+    subagents_root = tmp_path / "subagents"
+    subagent_dir = subagents_root / "missing_capability_worker"
+    subagent_dir.mkdir(parents=True)
+    (subagent_dir / "extension.py").write_text(
+        "async def missing_capability_tool() -> dict:\n"
+        "    return {'error': ''}\n\n"
+        "def register(api):\n"
+        "    api.tool(missing_capability_tool)\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "AGENT.yaml").write_text(
+        "name: missing_capability_worker\n"
+        "description: Missing capability worker.\n"
+        "execution:\n"
+        "  mode: worker\n"
+        "extension:\n"
+        "  module: subagents.missing_capability_worker.extension\n"
+        "capabilities:\n"
+        "  - demo.query\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "prompt.md").write_text("Missing capability prompt.\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    with pytest.raises(ValueError, match="must declare a capability"):
+        load_subagent_extension(
+            AgentRegistry(subagents_root=subagents_root).get("missing_capability_worker")
+        )
+
+
+def test_extension_tool_policy_rejects_unknown_policy_path(tmp_path, monkeypatch):
+    subagents_root = tmp_path / "subagents"
+    subagent_dir = subagents_root / "bad_policy_worker"
+    subagent_dir.mkdir(parents=True)
+    (subagent_dir / "extension.py").write_text(
+        "async def scoped_tool() -> dict:\n"
+        "    return {'error': ''}\n\n"
+        "def register(api):\n"
+        "    api.tool(scoped_tool, capability='demo.query', policy_path='missing')\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "AGENT.yaml").write_text(
+        "name: bad_policy_worker\n"
+        "description: Bad policy worker.\n"
+        "execution:\n"
+        "  mode: worker\n"
+        "extension:\n"
+        "  module: subagents.bad_policy_worker.extension\n"
+        "capabilities:\n"
+        "  - demo.query\n"
+        "policies:\n"
+        "  demo:\n"
+        "    enabled: true\n",
+        encoding="utf-8",
+    )
+    (subagent_dir / "prompt.md").write_text("Bad policy worker prompt.\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    with pytest.raises(ValueError, match="Unknown policy path"):
+        load_subagent_extension(AgentRegistry(subagents_root=subagents_root).get("bad_policy_worker"))
+
+
 def test_raw_extension_tool_gets_standard_events(tmp_path, monkeypatch):
     subagents_root = tmp_path / "subagents"
     subagent_dir = subagents_root / "raw_worker"
@@ -228,7 +385,7 @@ def test_raw_extension_tool_gets_standard_events(tmp_path, monkeypatch):
         "async def echo(value: str) -> dict:\n"
         "    return {'echo': value, 'error': ''}\n\n"
         "def register(api):\n"
-        "    api.tool(echo)\n",
+        "    api.tool(echo, capability='demo.echo')\n",
         encoding="utf-8",
     )
     (subagent_dir / "AGENT.yaml").write_text(
@@ -237,7 +394,9 @@ def test_raw_extension_tool_gets_standard_events(tmp_path, monkeypatch):
         "execution:\n"
         "  mode: worker\n"
         "extension:\n"
-        "  module: subagents.raw_worker.extension\n",
+        "  module: subagents.raw_worker.extension\n"
+        "capabilities:\n"
+        "  - demo.echo\n",
         encoding="utf-8",
     )
     (subagent_dir / "prompt.md").write_text("Raw worker prompt.\n", encoding="utf-8")

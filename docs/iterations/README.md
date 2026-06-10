@@ -9,6 +9,7 @@
 - [Subagent Extension 协议重构](05-subagent-extension-refactor.md)
 - [Subagent 边界清理与文档治理](06-subagent-boundary-cleanup.md)
 - [Text2SQL Typed State 与运行时清理](07-text2sql-state-and-runtime-cleanup.md)
+- [Subagent Policy Gateway 与授权边界](08-subagent-policy-gateway.md)
 
 ## 文档治理原则
 

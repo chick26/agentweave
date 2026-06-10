@@ -25,9 +25,18 @@ CapabilityResolverFn = Callable[[AgentManifest], dict[str, Any] | None]
 
 
 @dataclass
+class ToolPolicyBinding:
+    tool_name: str
+    capability: str = ""
+    policy_path: str = ""
+    audit_name: str = ""
+
+
+@dataclass
 class SubagentExtension:
     module_name: str
     tools: list[Any] = field(default_factory=list)
+    tool_policies: dict[str, ToolPolicyBinding] = field(default_factory=dict)
     validators: list[ValidateEnvironmentFn] = field(default_factory=list)
     prompt_contexts: list[PromptContextFn] = field(default_factory=list)
     result_formatters: list[ResultFormatter] = field(default_factory=list)
@@ -44,6 +53,7 @@ class SubagentExtensionAPI:
         self._prompt_contexts: list[PromptContextFn] = []
         self._result_formatters: list[ResultFormatter] = []
         self._capability_resolvers: list[CapabilityResolverFn] = []
+        self._tool_policies: dict[str, ToolPolicyBinding] = {}
 
     def tool(
         self,
@@ -52,6 +62,9 @@ class SubagentExtensionAPI:
         *,
         name: str = "",
         description: str = "",
+        capability: str = "",
+        policy_path: str = "",
+        audit_name: str = "",
     ) -> Any:
         """Register a subagent-local tool.
 
@@ -61,7 +74,14 @@ class SubagentExtensionAPI:
         """
         if tool_obj is None and fn is None:
             def decorator(inner: Callable[..., Any]) -> Any:
-                self.tool(inner, name=name, description=description)
+                self.tool(
+                    inner,
+                    name=name,
+                    description=description,
+                    capability=capability,
+                    policy_path=policy_path,
+                    audit_name=audit_name,
+                )
                 return inner
 
             return decorator
@@ -72,7 +92,16 @@ class SubagentExtensionAPI:
             raise TypeError("tool expects a callable or FunctionTool.")
         tool = _prepare_tool(tool_obj, name=name, description=description)
         _validate_tool(tool)
+        tool_name = _tool_name(tool)
+        binding = self._build_tool_policy_binding(
+            tool_name=tool_name,
+            capability=capability,
+            policy_path=policy_path,
+            audit_name=audit_name,
+        )
+        setattr(tool, "_agentweave_tool_policy", binding)
         self._tools.append(tool)
+        self._tool_policies[tool_name] = binding
         return tool_obj
 
     def validate_environment(self, fn: ValidateEnvironmentFn) -> None:
@@ -101,10 +130,41 @@ class SubagentExtensionAPI:
         return SubagentExtension(
             module_name=module_name,
             tools=list(self._tools),
+            tool_policies=dict(self._tool_policies),
             validators=list(self._validators),
             prompt_contexts=list(self._prompt_contexts),
             result_formatters=list(self._result_formatters),
             capability_resolvers=list(self._capability_resolvers),
+        )
+
+    def _build_tool_policy_binding(
+        self,
+        *,
+        tool_name: str,
+        capability: str = "",
+        policy_path: str = "",
+        audit_name: str = "",
+    ) -> ToolPolicyBinding:
+        clean_capability = str(capability or "").strip()
+        clean_policy_path = str(policy_path or "").strip()
+        clean_audit_name = str(audit_name or "").strip() or tool_name
+        if not clean_capability:
+            raise ValueError(
+                f"Subagent `{self.manifest.name}` tool `{tool_name}` must declare "
+                "a capability."
+            )
+        if clean_capability not in self.manifest.capabilities:
+            raise ValueError(
+                f"Subagent `{self.manifest.name}` tool `{tool_name}` declares unknown "
+                f"capability `{clean_capability}`."
+            )
+        if clean_policy_path:
+            _policy_at_path(self.manifest.policies, clean_policy_path)
+        return ToolPolicyBinding(
+            tool_name=tool_name,
+            capability=clean_capability,
+            policy_path=clean_policy_path,
+            audit_name=clean_audit_name,
         )
 
 
@@ -184,6 +244,33 @@ def resolve_extension_capabilities(manifest: AgentManifest) -> dict[str, Any]:
     return payload
 
 
+def resolve_tool_audit_metadata(
+    *,
+    manifest: AgentManifest,
+    tool_name: str,
+) -> dict[str, Any]:
+    extension = load_subagent_extension(manifest)
+    binding = None
+    if extension is not None:
+        binding = extension.tool_policies.get(tool_name)
+    if binding is None:
+        raise ValueError(
+            f"Subagent `{manifest.name}` tool `{tool_name}` is missing policy metadata."
+        )
+    policy_snapshot: Any = {}
+    if binding.policy_path:
+        policy_snapshot = _policy_at_path(manifest.policies, binding.policy_path)
+    return {
+        "subagent": manifest.name,
+        "tool": tool_name,
+        "capability": binding.capability,
+        "policy_path": binding.policy_path,
+        "policy_snapshot": _jsonable_policy(policy_snapshot),
+        "audit_name": binding.audit_name or tool_name,
+        "scoped": True,
+    }
+
+
 def validate_extension_environment(manifest: AgentManifest) -> None:
     extension = load_subagent_extension(manifest)
     if extension is None:
@@ -213,6 +300,13 @@ def _validate_tool(tool_obj: Any) -> None:
     name = getattr(tool_obj, "name", "") or getattr(tool_obj, "__name__", "")
     if not str(name or "").strip():
         raise ValueError(f"Registered subagent tool is missing a name: {tool_obj!r}")
+
+
+def _tool_name(tool_obj: Any) -> str:
+    name = getattr(tool_obj, "name", "") or getattr(tool_obj, "__name__", "")
+    if not str(name or "").strip():
+        raise ValueError(f"Registered subagent tool is missing a name: {tool_obj!r}")
+    return str(name)
 
 
 def _prepare_tool(tool_obj: Any, *, name: str = "", description: str = "") -> Any:
@@ -298,3 +392,20 @@ def _payload_error(payload: Any) -> str:
     if isinstance(payload, dict):
         return str(payload.get("error") or "")
     return ""
+
+
+def _policy_at_path(policies: dict[str, Any], path: str) -> Any:
+    current: Any = policies
+    for part in [item for item in path.split(".") if item]:
+        if not isinstance(current, dict) or part not in current:
+            raise ValueError(f"Unknown policy path: {path}")
+        current = current[part]
+    return current
+
+
+def _jsonable_policy(value: Any) -> Any:
+    try:
+        json.dumps(value, ensure_ascii=False, default=str)
+    except TypeError:
+        return str(value)
+    return value

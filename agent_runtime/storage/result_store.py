@@ -36,11 +36,13 @@ class ResultStore:
         self,
         *,
         run_id: str,
+        session_id: str = "",
+        bot_id: str = "",
         domain: str,
         sql: str,
         rows: list[dict[str, Any]],
     ) -> str:
-        """Compatibility wrapper for SQL results."""
+        """Create a SQL result artifact using the standard artifact store."""
         return self.create_artifact(
             run_id=run_id,
             artifact=ResultArtifactSpec(
@@ -57,6 +59,8 @@ class ResultStore:
                 row_count=len(rows),
                 row_count_is_exact=True,
             ),
+            session_id=session_id,
+            bot_id=bot_id,
         )
 
     def create_artifact(
@@ -64,6 +68,8 @@ class ResultStore:
         *,
         run_id: str,
         artifact: ResultArtifactSpec,
+        session_id: str = "",
+        bot_id: str = "",
     ) -> str:
         self._opportunistic_cleanup()
         normalized = artifact.normalized()
@@ -75,9 +81,10 @@ class ResultStore:
                 """
                 INSERT INTO result_artifacts (
                     id, run_id, artifact_type, source, title,
-                    columns_json, metadata_json, row_count, row_count_is_exact, created_at
+                    columns_json, metadata_json, row_count, row_count_is_exact,
+                    session_id, bot_id, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     result_id,
@@ -89,6 +96,8 @@ class ResultStore:
                     json.dumps(metadata, ensure_ascii=False, default=str),
                     normalized.row_count,
                     1 if normalized.row_count_is_exact else 0,
+                    session_id,
+                    bot_id,
                     created_at,
                 ),
             )
@@ -135,13 +144,21 @@ class ResultStore:
                 deleted += self._delete_results([str(row["id"]) for row in rows])
         return deleted
 
-    def get_metadata(self, result_id: str) -> dict[str, Any]:
+    def get_metadata(
+        self,
+        result_id: str,
+        *,
+        run_id: str = "",
+        session_id: str = "",
+        bot_id: str = "",
+    ) -> dict[str, Any]:
         with self._lock:
             row = self._connection.execute(
                 """
                 SELECT
                     id, run_id, artifact_type, source, title,
-                    columns_json, metadata_json, row_count, row_count_is_exact, created_at
+                    columns_json, metadata_json, row_count, row_count_is_exact,
+                    session_id, bot_id, created_at
                 FROM result_artifacts
                 WHERE id = ?
                 """,
@@ -149,7 +166,8 @@ class ResultStore:
             ).fetchone()
         if row is None:
             raise KeyError(f"Unknown result_id: {result_id}")
-        preview_rows = self.get_page(result_id, offset=0, limit=5)
+        _assert_scope(row, run_id=run_id, session_id=session_id, bot_id=bot_id)
+        preview_rows = self._get_page_rows(result_id, offset=0, limit=5)
         metadata = json.loads(row["metadata_json"] or "{}")
         artifact = ResultArtifactSpec(
             artifact_type=row["artifact_type"],
@@ -170,12 +188,26 @@ class ResultStore:
         summary.update(
             {
                 "run_id": row["run_id"],
+                "session_id": row["session_id"],
+                "bot_id": row["bot_id"],
             }
         )
         return summary
 
-    def get_artifact(self, result_id: str) -> dict[str, Any]:
-        return self.get_metadata(result_id)
+    def get_artifact(
+        self,
+        result_id: str,
+        *,
+        run_id: str = "",
+        session_id: str = "",
+        bot_id: str = "",
+    ) -> dict[str, Any]:
+        return self.get_metadata(
+            result_id,
+            run_id=run_id,
+            session_id=session_id,
+            bot_id=bot_id,
+        )
 
     def get_artifact_page(
         self,
@@ -183,9 +215,17 @@ class ResultStore:
         *,
         offset: int = 0,
         limit: int = 50,
+        run_id: str = "",
+        session_id: str = "",
+        bot_id: str = "",
     ) -> dict[str, Any]:
-        metadata = self.get_metadata(result_id)
-        rows = self.get_page(result_id, offset=offset, limit=limit)
+        metadata = self.get_metadata(
+            result_id,
+            run_id=run_id,
+            session_id=session_id,
+            bot_id=bot_id,
+        )
+        rows = self._get_page_rows(result_id, offset=offset, limit=limit)
         return {
             **metadata,
             "offset": max(0, int(offset)),
@@ -194,6 +234,24 @@ class ResultStore:
         }
 
     def get_page(
+        self,
+        result_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        run_id: str = "",
+        session_id: str = "",
+        bot_id: str = "",
+    ) -> list[dict[str, Any]]:
+        self.get_metadata(
+            result_id,
+            run_id=run_id,
+            session_id=session_id,
+            bot_id=bot_id,
+        )
+        return self._get_page_rows(result_id, offset=offset, limit=limit)
+
+    def _get_page_rows(
         self,
         result_id: str,
         *,
@@ -215,12 +273,28 @@ class ResultStore:
             ).fetchall()
         return [json.loads(row["row_json"]) for row in rows]
 
-    def export_csv(self, result_id: str) -> bytes:
-        metadata = self.get_metadata(result_id)
+    def export_csv(
+        self,
+        result_id: str,
+        *,
+        run_id: str = "",
+        session_id: str = "",
+        bot_id: str = "",
+    ) -> bytes:
+        metadata = self.get_metadata(
+            result_id,
+            run_id=run_id,
+            session_id=session_id,
+            bot_id=bot_id,
+        )
         preview = metadata.get("preview") if isinstance(metadata.get("preview"), dict) else {}
         columns = list(preview.get("columns") or [])
         metrics = metadata.get("metrics") if isinstance(metadata.get("metrics"), dict) else {}
-        rows = self.get_page(result_id, offset=0, limit=max(1, int(metrics.get("stored_count") or 0)))
+        rows = self._get_page_rows(
+            result_id,
+            offset=0,
+            limit=max(1, int(metrics.get("stored_count") or 0)),
+        )
         if not columns:
             columns = columns_from_rows(rows)
 
@@ -247,6 +321,8 @@ class ResultStore:
                     metadata_json TEXT NOT NULL,
                     row_count INTEGER NOT NULL,
                     row_count_is_exact INTEGER NOT NULL DEFAULT 1,
+                    session_id TEXT NOT NULL DEFAULT '',
+                    bot_id TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL
                 )
                 """
@@ -290,6 +366,8 @@ class ResultStore:
             "metadata_json",
             "row_count",
             "row_count_is_exact",
+            "session_id",
+            "bot_id",
             "created_at",
         }
         if columns != expected:
@@ -324,3 +402,23 @@ class ResultStore:
 def _utc_now_iso_from_age(max_age_hours: float) -> str:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=float(max_age_hours))
     return cutoff.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _assert_scope(
+    row: sqlite3.Row,
+    *,
+    run_id: str = "",
+    session_id: str = "",
+    bot_id: str = "",
+) -> None:
+    expected = {
+        "run_id": run_id,
+        "session_id": session_id,
+        "bot_id": bot_id,
+    }
+    if not any(str(value or "") for value in expected.values()):
+        raise KeyError("Result access requires run_id, session_id, or bot_id scope.")
+    for field, value in expected.items():
+        clean_value = str(value or "")
+        if clean_value and str(row[field] or "") != clean_value:
+            raise KeyError(f"Result access denied for {field}.")

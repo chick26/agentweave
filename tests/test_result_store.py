@@ -8,6 +8,8 @@ def test_result_store_create_page_export(tmp_path):
     store = ResultStore(tmp_path / "agent_results.sqlite")
     result_id = store.create_result(
         run_id="run-1",
+        session_id="session-1",
+        bot_id="data_analyst",
         domain="sea_cable_faults",
         sql="SELECT sea_cable_no, city FROM sea_cable_faults",
         rows=[
@@ -16,7 +18,12 @@ def test_result_store_create_page_export(tmp_path):
         ],
     )
 
-    metadata = store.get_metadata(result_id)
+    metadata = store.get_metadata(
+        result_id,
+        run_id="run-1",
+        session_id="session-1",
+        bot_id="data_analyst",
+    )
     assert metadata["result_id"] == result_id
     assert metadata["run_id"] == "run-1"
     assert metadata["metadata"]["domain"] == "sea_cable_faults"
@@ -25,10 +32,10 @@ def test_result_store_create_page_export(tmp_path):
     assert metadata["metrics"]["row_count"] == 2
     assert metadata["metrics"]["stored_count"] == 2
 
-    assert store.get_page(result_id, offset=1, limit=1) == [
+    assert store.get_page(result_id, offset=1, limit=1, session_id="session-1") == [
         {"sea_cable_no": "APG", "city": "Singapore"}
     ]
-    csv_text = store.export_csv(result_id).decode("utf-8-sig")
+    csv_text = store.export_csv(result_id, bot_id="data_analyst").decode("utf-8-sig")
     assert "sea_cable_no,city" in csv_text
     assert "NCP,Hong Kong" in csv_text
     assert "APG,Singapore" in csv_text
@@ -38,18 +45,24 @@ def test_result_store_cleanup_by_max_results_and_age(tmp_path):
     store = ResultStore(tmp_path / "agent_results.sqlite")
     old_id = store.create_result(
         run_id="run-old",
+        session_id="session-old",
+        bot_id="bot",
         domain="demo",
         sql="SELECT 1",
         rows=[{"value": 1}],
     )
     keep_id = store.create_result(
         run_id="run-keep",
+        session_id="session-keep",
+        bot_id="bot",
         domain="demo",
         sql="SELECT 2",
         rows=[{"value": 2}],
     )
     drop_id = store.create_result(
         run_id="run-drop",
+        session_id="session-drop",
+        bot_id="bot",
         domain="demo",
         sql="SELECT 3",
         rows=[{"value": 3}],
@@ -70,14 +83,66 @@ def test_result_store_cleanup_by_max_results_and_age(tmp_path):
     assert store.cleanup(max_age_hours=1) == 1
     assert store.cleanup(max_results=1) == 1
 
-    assert store.get_metadata(drop_id)["result_id"] == drop_id
-    for result_id in (old_id, keep_id):
+    assert store.get_metadata(drop_id, run_id="run-drop")["result_id"] == drop_id
+    for result_id, run_id in ((old_id, "run-old"), (keep_id, "run-keep")):
         try:
-            store.get_metadata(result_id)
+            store.get_metadata(result_id, run_id=run_id)
         except KeyError:
             pass
         else:
             raise AssertionError(f"Expected {result_id} to be cleaned")
+
+
+def test_result_store_scope_guard_allows_matching_scope(tmp_path):
+    store = ResultStore(tmp_path / "agent_results.sqlite")
+    result_id = store.create_result(
+        run_id="run-1",
+        session_id="session-1",
+        bot_id="data_analyst",
+        domain="demo",
+        sql="SELECT 1",
+        rows=[{"value": 1}],
+    )
+
+    metadata = store.get_metadata(
+        result_id,
+        run_id="run-1",
+        session_id="session-1",
+        bot_id="data_analyst",
+    )
+
+    assert metadata["session_id"] == "session-1"
+    assert metadata["bot_id"] == "data_analyst"
+    assert store.get_artifact_page(result_id, session_id="session-1")["rows"] == [
+        {"value": 1}
+    ]
+    assert "value" in store.export_csv(result_id, bot_id="data_analyst").decode("utf-8-sig")
+
+
+def test_result_store_scope_guard_rejects_mismatched_scope(tmp_path):
+    store = ResultStore(tmp_path / "agent_results.sqlite")
+    result_id = store.create_result(
+        run_id="run-1",
+        session_id="session-1",
+        bot_id="data_analyst",
+        domain="demo",
+        sql="SELECT 1",
+        rows=[{"value": 1}],
+    )
+
+    try:
+        store.get_metadata(result_id, session_id="session-2")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("Expected mismatched session scope to be rejected")
+
+    try:
+        store.get_metadata(result_id)
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("Expected missing scope to be rejected")
 
 
 def test_extract_result_metadata_from_subagent_artifact():
@@ -111,6 +176,9 @@ def test_extract_result_metadata_from_subagent_artifact():
             "artifact_type": "sql_result",
             "title": "",
             "source": "",
+            "run_id": "",
+            "session_id": "",
+            "bot_id": "",
             "preview": {
                 "kind": "rows",
                 "columns": ["value"],

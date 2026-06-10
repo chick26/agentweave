@@ -21,6 +21,7 @@ class RuntimeContext:
     run_id: str
     model_profile: ModelProfile
     session_id: str = ""
+    bot_id: str = "default"
     parent_run_id: str = ""
     result_store: Any | None = None
     result_formatters: Any | None = None
@@ -41,6 +42,8 @@ class RuntimeContext:
             self.events = self.parent.events
             if not self.session_id:
                 self.session_id = self.parent.session_id
+            if self.bot_id == "default":
+                self.bot_id = self.parent.bot_id
             if self.result_store is None:
                 self.result_store = self.parent.result_store
             if self.result_formatters is None:
@@ -83,6 +86,7 @@ class RuntimeContext:
         return RuntimeContext(
             run_id=run_id,
             session_id=self.session_id,
+            bot_id=self.bot_id,
             parent_run_id=parent_run_id if parent_run_id is not None else self.run_id,
             model_profile=self.model_profile,
             result_store=self.result_store,

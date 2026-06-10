@@ -336,10 +336,15 @@ def test_rag_tool_searches_prepared_index(tmp_path, monkeypatch):
     assert payload["result_id"].startswith("res_")
     assert payload["chunks"][0]["chunk_id"] == "knowledge.md#p1:c0"
     assert payload["chunks"][0]["match_method"] == "prepared_index"
-    metadata = result_store.get_metadata(payload["result_id"])
+    metadata = result_store.get_metadata(payload["result_id"], run_id="rag-index-run")
     assert metadata["artifact_type"] == "rag_chunks"
     assert metadata["metadata"]["query"] == "target"
-    assert result_store.get_page(payload["result_id"], offset=0, limit=10)[0]["chunk_id"] == "knowledge.md#p1:c0"
+    assert result_store.get_page(
+        payload["result_id"],
+        offset=0,
+        limit=10,
+        run_id="rag-index-run",
+    )[0]["chunk_id"] == "knowledge.md#p1:c0"
 
 
 def test_rag_summary_tool_returns_prepared_index_summary(tmp_path, monkeypatch):

@@ -165,6 +165,7 @@ class AgentRuntime:
         context = RuntimeContext(
             run_id=session_id,
             session_id=session_id,
+            bot_id=bot.id,
             model_profile=self.model_profile,
             result_store=self.result_store,
             result_formatters=self.result_formatters,

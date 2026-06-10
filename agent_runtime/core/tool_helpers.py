@@ -34,11 +34,13 @@ def emit_tool_start(
     tool_name: str,
     input_payload: dict[str, Any],
 ) -> None:
+    audit = _tool_audit_metadata(run_ctx, tool_name)
     run_ctx.emit_payload(
         kind=EventKind.TOOL_CALL_START,
         payload={
             "stage": "tool_call_start",
             "tool_name": tool_name,
+            **audit,
             "input": input_payload,
         },
     )
@@ -52,14 +54,20 @@ def emit_tool_finish(
     status: str = "completed",
 ) -> None:
     error = str(tool_output.metadata.get("error") or "")
+    audit = _tool_audit_metadata(run_ctx, tool_name)
+    metadata = {
+        **audit,
+        **tool_output.metadata,
+    }
     run_ctx.emit_payload(
         kind=EventKind.TOOL_RESULT,
         payload={
             "stage": "tool_result",
             "tool_name": tool_name,
+            **audit,
             "status": status,
             "ui_content": tool_output.ui_content,
-            "metadata": tool_output.metadata,
+            "metadata": metadata,
             "error": error,
         },
         error=error,
@@ -69,8 +77,19 @@ def emit_tool_finish(
         payload={
             "stage": "tool_call_end",
             "tool_name": tool_name,
+            **audit,
             "status": status,
             "error": error,
         },
         error=error,
     )
+
+
+def _tool_audit_metadata(run_ctx: RuntimeContext, tool_name: str) -> dict[str, Any]:
+    subagent_name = str(run_ctx.active_subagent or "")
+    if not subagent_name or run_ctx.agent_registry is None:
+        return {}
+    manifest = run_ctx.agent_registry.get(subagent_name)
+    from agent_runtime.worker.subagent_extensions import resolve_tool_audit_metadata
+
+    return resolve_tool_audit_metadata(manifest=manifest, tool_name=tool_name)

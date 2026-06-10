@@ -212,19 +212,30 @@ def test_service_result_page_and_csv_export(tmp_path: Path) -> None:
     service = _service(tmp_path)
     result_id = service.runtime.result_store.create_result(
         run_id="run-1",
+        session_id="web-test",
+        bot_id="data_analyst",
         domain="idc_resources",
         sql="SELECT 1 AS count",
         rows=[{"count": 1}, {"count": 2}],
     )
 
-    page = service.get_result_page(result_id, page=1, page_size=1)
-    csv_data = service.export_result_csv(result_id)
+    page = service.get_result_page(
+        result_id,
+        page=1,
+        page_size=1,
+        session_id="web-test",
+        bot_id="data_analyst",
+    )
+    csv_data = service.export_result_csv(result_id, session_id="web-test")
 
     assert page["result_id"] == result_id
     assert page["rows"] == [{"count": 1}]
     assert page["page"]["has_more"] is True
     assert page["metrics"]["stored_count"] == 2
     assert "count" in csv_data.decode("utf-8-sig")
+
+    with pytest.raises(KeyError):
+        service.get_result_page(result_id, session_id="other-session")
 
 
 def test_service_reload_resources_returns_ui_event(tmp_path: Path) -> None:

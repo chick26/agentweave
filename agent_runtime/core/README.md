@@ -45,8 +45,9 @@
 
 - manifest 可声明 `capabilities`、`policies`、`output_contract`，这些字段是角色治理、审计和 UI/诊断理解入口。
 - `SubagentExtensionAPI` 负责让 subagent 自己注册 tools、environment validator、prompt context、capability resolver 和 ResultFormatter。
+- subagent-local tools 可通过 extension API 绑定 `capability`、`policy_path` 和 `audit_name`；框架在 extension 加载时校验声明，并在工具事件中记录 policy audit metadata。
 - Runner 只负责发现、加载 extension、创建 child context、构造 worker、运行、timeout、事件桥接和结果归一化。
-- capability/policy 的业务解释不写死在 Runner；Text2SQL/RAG 的策略说明由各自 extension/tool 层消费。
+- capability/policy 的业务解释不写死在 Runner；Runner 和事件层只负责绑定校验、审计记录和隔离上下文，Text2SQL/RAG 的策略说明由各自 extension/tool 层消费。
 - `RuntimeContext.get_typed_state(namespace, factory)` 和 `SubagentContext.typed_state(...)` 提供 run 内 typed state 容器；框架只管理生命周期和隔离，subagent 自己定义 state schema。
 - 默认不让 subagent 递归调用其他 subagent；后续如开放，应通过 manifest policy 显式声明。
 
@@ -78,12 +79,12 @@
 ```
 
 - core envelope 不再暴露 SQL 专属顶层字段，例如 `sql`、`sample_rows`、`stored_row_count`、`store_truncated`。这些信息如有业务意义，应放入 `metadata` 或由 subagent 自己的 tool output 暴露给 worker。
-- `ResultStore` 当前只保存 artifact-neutral schema：`result_artifacts` + `result_artifact_rows`。
+- `ResultStore` 当前只保存 artifact-neutral schema：`result_artifacts` + `result_artifact_rows`，并在 artifact metadata 外记录 `run_id`、`session_id`、`bot_id` 作为读取 scope。
 - 旧 `query_results` / `query_result_rows` 表已删除；本轮接受测试数据直接重建，不做迁移。
 
 ### Text2SQL/RAG 迁移状态
 
-- Text2SQL manifest 已声明 `db.readonly`、`schema.inspect` 和 SQL policy；SQL 只读、schema 校验、行数截断仍在工具层强制执行。
+- Text2SQL manifest 已声明 `db.readonly`、`schema.inspect` 和 SQL policy；SQL 只读、schema 校验、行数截断和 SQLite 查询超时由 Text2SQL 工具/DB backend 按 manifest policy 强制执行。
 - Text2SQL extension 注册 SQL tools、SQL ResultFormatter、readiness check 和 domain prompt context；Text2SQL run state 通过 typed state manager 管理，不再散写裸 cache key。
 - Text2SQL runtime 只连接 SQLite；CSV 仅作为项目级 prepare CLI 的离线输入，用来生成 `.agentweave/text2sql.sqlite`。
 - RAG manifest 已声明 `rag.search` capability 和轻量 policy；RAG extension 注册 chunks ResultFormatter，并负责搜索结果 artifact 化。
@@ -113,11 +114,13 @@
 - 已落地 `ResultFormatter` 注册化：Text2SQL/RAG 在 extension 中注册 formatter，core/memory 注册 memory formatter，ResultStore 改为 artifact-first。
 - 已落地 namespaced typed state：框架提供 run-scoped 容器，Text2SQL 用自己的 state manager 管理 backend/domain/schema。
 - subagent manifest 已新增 `capabilities`、`policies`、`output_contract`，作为角色治理和审计声明；工具层仍负责最终安全 enforcement。
+- 已落地 subagent tool policy metadata：工具注册时必须绑定 capability，policy 可按需绑定，工具事件统一带审计字段。
+- 已落地 ResultStore scope 字段和可选读取校验，服务层分页/导出接口可传入 run/session/bot scope。
 - 标准 artifact summary 由 formatter/spec 直接决定，core 不再做 SQL/RAG 定制化推断。
 - ResultStore 旧 SQL 专用表直接删除并使用 artifact-neutral schema，本轮不保留测试数据迁移。
 - SQL generation 性能实验暂时回退，架构治理优先于延迟优化。
 
 ### 行动项
 
-- 后续继续细化 capability resolver 与 policy enforcement 的对应关系，必要时引入 MCP/API gateway。
+- 后续继续细化 capability resolver 与外部 MCP/API gateway 的对应关系；新增内部系统工具时优先通过 extension tool metadata 绑定 capability/policy。
 - 后续为 SQL generation 设计稳定的 no-thinking/structured-output 路径，再讨论 latency 优化。

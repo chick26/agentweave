@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 from agents.tool_context import ToolContext
@@ -56,6 +57,16 @@ def _install_text2sql_backend(run_ctx: RuntimeContext, backend: DatabaseBackend)
         Text2SQLState,
     )
     state.backend = backend
+
+
+class _PolicyRegistry:
+    def __init__(self, *, policies: dict):
+        self._registry = AgentRegistry(subagents_root=Path("subagents"))
+        self._policies = policies
+
+    def get(self, name: str):
+        manifest = self._registry.get(name)
+        return replace(manifest, policies=self._policies)
 
 
 def test_text2sql_extension_connects_prepared_backend_from_env(tmp_path, monkeypatch):
@@ -120,7 +131,7 @@ def test_execute_sql_returns_result_pointer_and_sample(tmp_path, monkeypatch):
     assert output["sample_size"] == 1
     assert output["truncated"] is True
     assert "rows" not in output
-    assert store.get_page(output["result_id"], offset=0, limit=10) == [
+    assert store.get_page(output["result_id"], offset=0, limit=10, run_id="run-1") == [
         {"sea_cable_no": "NCP"},
         {"sea_cable_no": "APG"},
     ]
@@ -139,7 +150,16 @@ def test_execute_sql_emits_result_created_ui_event(tmp_path, monkeypatch):
         run_id="execute-run",
         model_profile=_model_profile(),
         result_store=store,
-        agent_registry=AgentRegistry(subagents_root=Path("subagents")),
+        agent_registry=_PolicyRegistry(
+            policies={
+                "db": {
+                    "readonly": True,
+                    "max_rows": 1000,
+                    "sample_rows": 1,
+                    "require_schema_validation": True,
+                }
+            }
+        ),
         active_subagent="text2sql",
     )
     _install_text2sql_backend(run_ctx, backend)
@@ -185,6 +205,10 @@ def test_execute_sql_emits_result_created_ui_event(tmp_path, monkeypatch):
         "tool_call_end",
     ]
     assert tool_events[0]["payload"]["tool_name"] == "execute_sql"
+    assert tool_events[0]["payload"]["capability"] == "db.readonly"
+    assert tool_events[0]["payload"]["policy_path"] == "db"
+    assert tool_events[0]["payload"]["policy_snapshot"]["max_rows"] == 1000
+    assert tool_events[1]["payload"]["metadata"]["audit_name"] == "text2sql.execute_sql"
     assert tool_events[-1]["payload"]["status"] == "completed"
 
 
@@ -278,9 +302,7 @@ def test_execute_sql_emits_failed_tool_lifecycle(tmp_path):
     assert tool_events[1]["error"]
 
 
-def test_execute_sql_marks_store_truncation_without_claiming_exact_total(tmp_path, monkeypatch):
-    monkeypatch.setattr(tools, "SQL_RESULT_STORE_MAX_ROWS", 2)
-    monkeypatch.setattr(tools, "SQL_RESULT_SAMPLE_ROWS", 1)
+def test_execute_sql_uses_manifest_policy_for_row_limits(tmp_path):
     backend = _sqlite_backend(
         tmp_path,
         "sea_cable_faults",
@@ -292,7 +314,16 @@ def test_execute_sql_marks_store_truncation_without_claiming_exact_total(tmp_pat
         run_id="execute-truncated-run",
         model_profile=_model_profile(),
         result_store=store,
-        agent_registry=AgentRegistry(subagents_root=Path("subagents")),
+        agent_registry=_PolicyRegistry(
+            policies={
+                "db": {
+                    "readonly": True,
+                    "max_rows": 2,
+                    "sample_rows": 1,
+                    "require_schema_validation": True,
+                }
+            }
+        ),
         active_subagent="text2sql",
     )
     _install_text2sql_backend(run_ctx, backend)
@@ -325,9 +356,22 @@ def test_execute_sql_marks_store_truncation_without_claiming_exact_total(tmp_pat
     assert payload["store_truncated"] is True
     assert payload["has_more"] is True
     assert payload["row_count_is_exact"] is False
-    assert store.get_metadata(payload["result_id"])["metrics"]["row_count"] == 2
-    assert store.get_metadata(payload["result_id"])["metrics"]["count_is_exact"] is False
-    assert store.get_page(payload["result_id"], offset=0, limit=10) == [
+    assert payload["sample_max_rows"] == 1
+    assert payload["store_max_rows"] == 2
+    assert store.get_metadata(
+        payload["result_id"],
+        run_id="execute-truncated-run",
+    )["metrics"]["row_count"] == 2
+    assert store.get_metadata(
+        payload["result_id"],
+        run_id="execute-truncated-run",
+    )["metrics"]["count_is_exact"] is False
+    assert store.get_page(
+        payload["result_id"],
+        offset=0,
+        limit=10,
+        run_id="execute-truncated-run",
+    ) == [
         {"sea_cable_no": "NCP"},
         {"sea_cable_no": "APG"},
     ]

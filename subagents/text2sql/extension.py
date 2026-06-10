@@ -18,7 +18,7 @@ from agent_runtime.subagent_api import (
     ResultArtifactSpec,
 )
 from agent_runtime.shared.common import columns_from_rows
-from agent_runtime.shared.database import DatabaseBackend, SqlDatabaseBackend
+from agent_runtime.shared.database import DatabaseBackend, SqlDatabaseBackend, validate_readonly_sql
 from agent_runtime.shared.manifest import AgentManifest
 from subagents.text2sql.core.domain_catalog import (
     Text2SQLDomainCatalog,
@@ -45,11 +45,11 @@ _backend_cache_key: tuple[str, str] | None = None
 
 def register(api: Any) -> None:
     api.result_formatter(SqlResultFormatter())
-    api.tool(list_domains)
-    api.tool(get_domain_schema)
-    api.tool(search_domain_values)
-    api.tool(generate_readonly_sql)
-    api.tool(execute_sql)
+    api.tool(list_domains, capability="schema.inspect", audit_name="text2sql.list_domains")
+    api.tool(get_domain_schema, capability="schema.inspect", audit_name="text2sql.get_domain_schema")
+    api.tool(search_domain_values, capability="schema.inspect", audit_name="text2sql.search_domain_values")
+    api.tool(generate_readonly_sql, capability="sql.generate", audit_name="text2sql.generate_readonly_sql")
+    api.tool(execute_sql, capability="db.readonly", policy_path="db", audit_name="text2sql.execute_sql")
     api.validate_environment(validate_environment)
     api.prompt_context(build_prompt_context)
 
@@ -391,24 +391,41 @@ async def execute_sql(
         domain = _domain_catalog_from_context(ctx).get_domain(domain_name)
         state = _state_manager(run_ctx)
         active = state.ensure_domain(domain)
+        validate_readonly_sql(sql)
         if _schema_validation_required(run_ctx):
             validate_sql_uses_selected_schema(
                 sql,
                 selected_columns=active.columns,
                 allowed_tables=[active.table],
             )
+        store_max_rows = _db_policy_int(
+            run_ctx,
+            "max_rows",
+            SQL_RESULT_STORE_MAX_ROWS,
+        )
+        sample_max_rows = _db_policy_int(
+            run_ctx,
+            "sample_rows",
+            SQL_RESULT_SAMPLE_ROWS,
+        )
+        timeout_seconds = _db_policy_float(run_ctx, "timeout_seconds")
         fetched_rows = state.backend.execute_sql(
             sql,
-            max_rows=SQL_RESULT_STORE_MAX_ROWS + 1,
+            max_rows=store_max_rows + 1,
+            timeout_seconds=timeout_seconds,
         )
         output = _build_execute_output(
             run_ctx=run_ctx,
             domain_name=active.domain,
             sql=sql,
-            rows=fetched_rows[:SQL_RESULT_STORE_MAX_ROWS],
-            store_truncated=len(fetched_rows) > SQL_RESULT_STORE_MAX_ROWS,
+            rows=fetched_rows[:store_max_rows],
+            store_truncated=len(fetched_rows) > store_max_rows,
+            sample_max_rows=sample_max_rows,
+            store_max_rows=store_max_rows,
         )
     except Exception as exc:
+        store_max_rows = _db_policy_int(run_ctx, "max_rows", SQL_RESULT_STORE_MAX_ROWS)
+        sample_max_rows = _db_policy_int(run_ctx, "sample_rows", SQL_RESULT_SAMPLE_ROWS)
         output = {
             "sql": sql,
             "result_id": "",
@@ -421,8 +438,8 @@ async def execute_sql(
             "store_truncated": False,
             "has_more": False,
             "row_count_is_exact": True,
-            "sample_max_rows": SQL_RESULT_SAMPLE_ROWS,
-            "store_max_rows": SQL_RESULT_STORE_MAX_ROWS,
+            "sample_max_rows": sample_max_rows,
+            "store_max_rows": store_max_rows,
             "error": str(exc),
         }
     status = "failed" if output.get("error") else "completed"
@@ -497,9 +514,13 @@ def _build_execute_output(
     sql: str,
     rows: list[dict[str, Any]],
     store_truncated: bool = False,
+    sample_max_rows: int | None = None,
+    store_max_rows: int | None = None,
 ) -> dict[str, Any]:
+    sample_max_rows = int(sample_max_rows or SQL_RESULT_SAMPLE_ROWS)
+    store_max_rows = int(store_max_rows or SQL_RESULT_STORE_MAX_ROWS)
     columns = columns_from_rows(rows)
-    sample_rows = _compact_rows_for_tool(rows[:SQL_RESULT_SAMPLE_ROWS])
+    sample_rows = _compact_rows_for_tool(rows[:sample_max_rows])
     stored_row_count = len(rows)
     has_more = bool(store_truncated)
     row_count_is_exact = not has_more
@@ -516,8 +537,8 @@ def _build_execute_output(
             "row_count_is_exact": row_count_is_exact,
             "truncated": store_truncated or len(rows) > len(sample_rows),
             "store_truncated": store_truncated,
-            "sample_max_rows": SQL_RESULT_SAMPLE_ROWS,
-            "store_max_rows": SQL_RESULT_STORE_MAX_ROWS,
+            "sample_max_rows": sample_max_rows,
+            "store_max_rows": store_max_rows,
         },
     )
     return {
@@ -532,8 +553,8 @@ def _build_execute_output(
         "store_truncated": store_truncated,
         "has_more": has_more,
         "row_count_is_exact": row_count_is_exact,
-        "sample_max_rows": SQL_RESULT_SAMPLE_ROWS,
-        "store_max_rows": SQL_RESULT_STORE_MAX_ROWS,
+        "sample_max_rows": sample_max_rows,
+        "store_max_rows": store_max_rows,
         "error": None,
     }
 
@@ -609,6 +630,37 @@ def _schema_validation_required(run_ctx: SubagentContext) -> bool:
     if not isinstance(db_policy, dict):
         return True
     return bool(db_policy.get("require_schema_validation", True))
+
+
+def _db_policy(run_ctx: SubagentContext) -> dict[str, Any]:
+    db_policy = run_ctx.policies.get("db", {})
+    return db_policy if isinstance(db_policy, dict) else {}
+
+
+def _db_policy_int(
+    run_ctx: SubagentContext,
+    key: str,
+    fallback: int,
+    *,
+    minimum: int = 1,
+) -> int:
+    value = _db_policy(run_ctx).get(key, fallback)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(minimum, parsed)
+
+
+def _db_policy_float(run_ctx: SubagentContext, key: str) -> float | None:
+    value = _db_policy(run_ctx).get(key)
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _domain_catalog_from_context(ctx: SubagentToolContext) -> Text2SQLDomainCatalog:

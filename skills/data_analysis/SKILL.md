@@ -13,7 +13,7 @@ memory:
 
 # Data Analysis Skill
 
-这是一个可加载 skill，不是 subagent，也不会作为同名 tool 暴露。需要分析数据结果时，先通过 `load_skill("data_analysis")` 读取本方法卡，再把这里的分析步骤用于当前回答，或作为明确要求写入某个 subagent 的 task。
+读取本方法卡，再把这里的分析步骤用于当前回答，或作为明确要求写入某个 subagent 的 task。
 
 ## Workflow
 

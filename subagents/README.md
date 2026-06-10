@@ -49,6 +49,7 @@
 ### Extension API 使用
 
 - 当前 Text2SQL/RAG extension 注册 tools、ResultFormatter、readiness check 和 prompt context。
+- 当前 Text2SQL/RAG extension 的 subagent-local tools 已显式绑定 `capability`、`policy_path` 和 `audit_name`，事件流可审计具体能力与策略快照。
 - 仅回显 manifest 的 `capability_resolver` 已从 Text2SQL/RAG 移除；静态能力以 `AGENT.yaml` 为准。
 - 如果未来需要动态能力解析，再通过 `api.capability_resolver(...)` 注册真实动态 payload。
 
@@ -63,6 +64,8 @@
 - 已移除 Text2SQL runtime CSV backend，仅保留离线 CSV -> SQLite prepare 流程。
 - 已将 Text2SQL active domain/backend/schema 状态收敛到 `Text2SQLRunStateManager`，不再散写 `run_ctx.cache["active_*"]`。
 - 已移除 `TEXT2SQL_STRICT_SCHEMA_VALIDATION`，schema 校验策略统一读取 `AGENT.yaml` 的 `policies.db.require_schema_validation`。
+- 已将 Text2SQL `execute_sql` 的行数、样例数、schema validation 和 SQLite 查询超时收口到 `policies.db`。
+- 已将 RAG search/summary 绑定到 `rag.search` capability 和 `policies.rag`。
 - 已新增边界测试，防止 subagent 重新引入 `ENVIRONMENT.md`、`data/` 或 `prepare/`。
 
 ### 待确认问题

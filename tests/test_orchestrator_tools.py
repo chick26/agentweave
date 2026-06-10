@@ -177,7 +177,12 @@ def test_memory_search_creates_memory_records_artifact(tmp_path):
     assert result_events
     result = result_events[0]["payload"]["result"]
     assert result["artifact_type"] == "memory_records"
-    assert runtime.result_store.get_page(result["result_id"], offset=0, limit=10)[0]["key"] == "timezone"
+    assert runtime.result_store.get_page(
+        result["result_id"],
+        offset=0,
+        limit=10,
+        run_id="memory-run",
+    )[0]["key"] == "timezone"
 
 
 def test_orchestrator_hides_memory_surface_when_disabled(tmp_path):
