@@ -7,7 +7,7 @@ from agent_runtime.hooks.session_start import (
     SessionStartContext,
     build_default_session_start_hooks,
 )
-from agent_runtime.registry.skill_registry import AgentManifest, Skill, SuggestedQuestion
+from agent_runtime.registry.manifest_models import AgentManifest, Skill, SuggestedQuestion
 
 
 def _subagent(

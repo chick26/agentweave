@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from agent_runtime.memory.embeddings import EmbeddingProfile, load_embedding_profile
-from agent_runtime.registry.skill_registry import ManifestBase
+from agent_runtime.registry.manifest_models import ManifestBase
 
 
 def resolve_manifest_embedding_profile(

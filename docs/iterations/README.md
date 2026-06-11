@@ -10,6 +10,10 @@
 - [Subagent 边界清理与文档治理](06-subagent-boundary-cleanup.md)
 - [Text2SQL Typed State 与运行时清理](07-text2sql-state-and-runtime-cleanup.md)
 - [Subagent Policy Gateway 与授权边界](08-subagent-policy-gateway.md)
+- [Subagent 渐进瘦身与默认审计元数据](09-subagent-progressive-slimming.md)
+- [SubagentContext 直接收窄](10-subagent-context-slimming.md)
+- [Runtime Primitive 清理](11-runtime-primitive-cleanup.md)
+- [Text2SQL 模型与 Memory Toggle 稳定性修复](12-text2sql-model-and-memory-toggle-stability.md)
 
 ## 文档治理原则
 

@@ -91,7 +91,7 @@ Memory 不再只是按时间截断注入。当前支持：
 
 ### 5. 结果与诊断分离
 
-完整 SQL 结果写入 `.agentweave/agent_results.sqlite`，模型只接收 `result_id`、`row_count` 和样例行。诊断日志写入 `.agentweave/streamlit_sessions.sqlite`，前端按 Model Calls、执行过程、Memory Events 和 Results 分页展示。
+完整 SQL 结果写入 `.agentweave/agent_artifacts.sqlite`，模型只接收 `result_id`、`row_count` 和样例行。诊断日志写入 `.agentweave/streamlit_sessions.sqlite`，前端按 Model Calls、执行过程、Memory Events 和 Results 分页展示。
 
 ## 用户可见收益
 

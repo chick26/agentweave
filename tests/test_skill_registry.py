@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
+from agent_runtime.registry.agent_registry import AgentRegistry
+from agent_runtime.registry.skill_registry import SkillRegistry
 from subagents.text2sql.core.domain_catalog import Text2SQLDomainCatalog
 
 

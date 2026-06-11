@@ -8,14 +8,15 @@ import time
 
 import pytest
 
+from agent_runtime.core.result_formatters import ResultArtifactSpec
 from agent_runtime.server.service import AgentService, AgentServiceConfig
 from agent_runtime.storage.diagnostic_store import DiagnosticStore
-from agent_runtime.storage.result_store import ResultStore
+from agent_runtime.storage.artifact_store import ArtifactStore
 
 
 class FakeRuntime:
-    def __init__(self, result_store: ResultStore) -> None:
-        self.result_store = result_store
+    def __init__(self, artifact_store: ArtifactStore) -> None:
+        self.services = SimpleNamespace(artifact_store=artifact_store)
 
     def run_session_start_hook(self, **kwargs):
         return SimpleNamespace(message=f"welcome:{kwargs['session_id']}:{kwargs.get('bot_id', 'default')}")
@@ -131,7 +132,7 @@ def _service(tmp_path: Path) -> AgentService:
     )
     return AgentService(
         config=config,
-        runtime=FakeRuntime(ResultStore(tmp_path / "results.sqlite")),
+        runtime=FakeRuntime(ArtifactStore(tmp_path / "results.sqlite")),
         diagnostic_store=DiagnosticStore(tmp_path / "diagnostics.sqlite"),
     )
 
@@ -210,13 +211,23 @@ def test_service_sse_after_sequence_resumes_model_delta(tmp_path: Path) -> None:
 
 def test_service_result_page_and_csv_export(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    result_id = service.runtime.result_store.create_result(
+    result_id = service.runtime.services.artifact_store.create_artifact(
         run_id="run-1",
         session_id="web-test",
         bot_id="data_analyst",
-        domain="idc_resources",
-        sql="SELECT 1 AS count",
-        rows=[{"count": 1}, {"count": 2}],
+        artifact=ResultArtifactSpec(
+            artifact_type="sql_result",
+            title="SQL Result",
+            source="execute_sql",
+            rows=[{"count": 1}, {"count": 2}],
+            columns=["count"],
+            preview_rows=[{"count": 1}],
+            metadata={
+                "domain": "idc_resources",
+                "sql": "SELECT 1 AS count",
+            },
+            row_count=2,
+        ),
     )
 
     page = service.get_result_page(

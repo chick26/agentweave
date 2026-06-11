@@ -36,32 +36,23 @@ class CompressionDecision:
     counter: str
     fallback: bool
 
-    @property
-    def max_tokens(self) -> int:
-        """Backward-compatible alias for old tests/callers."""
-        return self.input_budget
-
 
 class ContextCompressor:
     def __init__(
         self,
-        context_window: int | None = None,
+        context_window: int = 4096,
         *,
-        max_tokens: int | None = None,
         reserved_output_tokens: int = 0,
         safety_margin_tokens: int = DEFAULT_SAFETY_MARGIN_TOKENS,
         model_name: str = "",
         token_counter: TokenCounter | None = None,
     ) -> None:
-        if context_window is None and max_tokens is not None:
-            safety_margin_tokens = 0
-        resolved_context_window = context_window or max_tokens or 4096
-        self.context_window = resolved_context_window
+        self.context_window = context_window
         self.reserved_output_tokens = max(0, reserved_output_tokens)
         self.safety_margin_tokens = max(0, safety_margin_tokens)
         self.input_budget = max(
             1,
-            resolved_context_window - self.reserved_output_tokens - self.safety_margin_tokens,
+            context_window - self.reserved_output_tokens - self.safety_margin_tokens,
         )
         self.token_counter = token_counter or build_token_counter(model_name)
 

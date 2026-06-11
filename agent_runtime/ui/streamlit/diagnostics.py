@@ -306,7 +306,7 @@ def _render_diagnostic_overview(diagnostic_run: dict[str, Any]) -> None:
         '<section class="aw-diagnostic-overview">'
         '<div class="aw-overview-header">'
         '<div class="aw-overview-title">诊断总览</div>'
-        '<div class="aw-overview-subtitle">Model calls · Memory · SQL · Result Store</div>'
+        '<div class="aw-overview-subtitle">Model calls · Memory · SQL · ArtifactStore</div>'
         '</div>'
         f'<div class="aw-metric-grid">{"".join(cards)}</div>'
         f'{result_html}'

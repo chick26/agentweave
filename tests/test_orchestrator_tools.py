@@ -27,9 +27,10 @@ def test_runtime_local_sqlite_stores_live_under_agentweave(tmp_path):
         memory_enabled=False,
     )
 
-    assert runtime.root == tmp_path
-    assert runtime.memory_store.path == tmp_path / ".agentweave" / "agent_memory.sqlite"
-    assert runtime.result_store.path == tmp_path / ".agentweave" / "agent_results.sqlite"
+    assert not hasattr(runtime, "root")
+    assert runtime.services.root == tmp_path
+    assert runtime.services.memory_store.path == tmp_path / ".agentweave" / "agent_memory.sqlite"
+    assert runtime.services.artifact_store.path == tmp_path / ".agentweave" / "agent_artifacts.sqlite"
 
 
 def test_runtime_readiness_checks_only_selected_bot_subagents(tmp_path, monkeypatch):
@@ -142,7 +143,7 @@ def test_memory_search_creates_memory_records_artifact(tmp_path):
         session_db_path=tmp_path / "sessions.sqlite",
         memory_enabled=True,
     )
-    runtime.memory_manager.write(
+    runtime.services.memory_manager.write(
         namespace="project",
         key="timezone",
         content="Use Asia/Hong_Kong for runtime examples.",
@@ -152,9 +153,9 @@ def test_memory_search_creates_memory_records_artifact(tmp_path):
     context = RuntimeContext(
         run_id="memory-run",
         session_id="memory-session",
-        model_profile=runtime.model_profile,
-        result_store=runtime.result_store,
-        result_formatters=runtime.result_formatters,
+        model_profile=runtime.services.model_profile,
+        artifact_store=runtime.services.artifact_store,
+        result_formatters=runtime.services.result_formatters,
     )
 
     output = asyncio.run(
@@ -177,12 +178,12 @@ def test_memory_search_creates_memory_records_artifact(tmp_path):
     assert result_events
     result = result_events[0]["payload"]["result"]
     assert result["artifact_type"] == "memory_records"
-    assert runtime.result_store.get_page(
+    assert runtime.services.artifact_store.get_artifact_page(
         result["result_id"],
         offset=0,
         limit=10,
         run_id="memory-run",
-    )[0]["key"] == "timezone"
+    )["rows"][0]["key"] == "timezone"
 
 
 def test_orchestrator_hides_memory_surface_when_disabled(tmp_path):
@@ -193,7 +194,7 @@ def test_orchestrator_hides_memory_surface_when_disabled(tmp_path):
         session_db_path=tmp_path / "sessions.sqlite",
         memory_enabled=False,
     )
-    runtime.memory_store.write("project", "metric_rule", "不要注入这条记忆。")
+    runtime.services.memory_store.write("project", "metric_rule", "不要注入这条记忆。")
 
     tool_names = {tool.name for tool in runtime._build_tools()}
     instructions = runtime._build_instructions("abc")
@@ -203,6 +204,29 @@ def test_orchestrator_hides_memory_surface_when_disabled(tmp_path):
     assert "memory_search" not in instructions
     assert "<memory_policy>" not in instructions
     assert "不要注入这条记忆。" not in instructions
+
+
+def test_session_start_does_not_read_memory_when_disabled(tmp_path, monkeypatch):
+    runtime = AgentRuntime(
+        base_url="http://example.test/v1",
+        model_name="orchestrator",
+        api_key="not-needed",
+        session_db_path=tmp_path / "sessions.sqlite",
+        memory_enabled=False,
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("memory context should not be built when disabled")
+
+    monkeypatch.setattr(
+        runtime.services.memory_manager,
+        "build_orchestrator_context",
+        fail_if_called,
+    )
+
+    result = runtime.run_session_start_hook(session_id="abc")
+
+    assert result.payload["memory_hint"] == ""
 
 
 def test_runtime_injects_current_time_without_time_tool(tmp_path):
@@ -227,8 +251,8 @@ def test_runtime_clear_memory_clears_persisted_memory(tmp_path):
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
     )
-    memory_id = runtime.memory_store.write("project", "metric_rule", "按柜数统计。")
-    runtime.memory_store.upsert_vector(
+    memory_id = runtime.services.memory_store.write("project", "metric_rule", "按柜数统计。")
+    runtime.services.memory_store.upsert_vector(
         memory_id=memory_id,
         namespace="project",
         embedding_model="fake",
@@ -238,8 +262,8 @@ def test_runtime_clear_memory_clears_persisted_memory(tmp_path):
 
     runtime.clear_memory()
 
-    assert runtime.memory_store.load_namespace("project") == []
-    assert runtime.memory_store.load_vectors(embedding_model="fake") == []
+    assert runtime.services.memory_store.load_namespace("project") == []
+    assert runtime.services.memory_store.load_vectors(embedding_model="fake") == []
 
 
 def test_skill_agent_tool_invocation_creates_isolated_worker_contexts(tmp_path, monkeypatch):
@@ -274,8 +298,8 @@ def test_skill_agent_tool_invocation_creates_isolated_worker_contexts(tmp_path, 
     orchestrator_context = RuntimeContext(
         run_id="abc",
         session_id="abc",
-        model_profile=runtime.model_profile,
-        result_store=runtime.result_store,
+        model_profile=runtime.services.model_profile,
+        artifact_store=runtime.services.artifact_store,
     )
 
     first_output = asyncio.run(
@@ -331,8 +355,8 @@ def test_load_skill_returns_skill_body(tmp_path):
     orchestrator_context = RuntimeContext(
         run_id="abc",
         session_id="abc",
-        model_profile=runtime.model_profile,
-        result_store=runtime.result_store,
+        model_profile=runtime.services.model_profile,
+        artifact_store=runtime.services.artifact_store,
     )
 
     output = asyncio.run(
@@ -384,8 +408,8 @@ def test_memory_injection(tmp_path):
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
     )
-    runtime.memory_manager.write("project", "metric_rule", "可用资源默认按柜数统计。")
-    runtime.memory_manager.write(
+    runtime.services.memory_manager.write("project", "metric_rule", "可用资源默认按柜数统计。")
+    runtime.services.memory_manager.write(
         "session:abc",
         "conversation_summary",
         "用户刚刚确认查询香港资源。",
@@ -408,7 +432,7 @@ def test_todo_context_injected_into_instructions(tmp_path):
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
     )
-    runtime.todo_state.update(
+    runtime.services.todo_state.update(
         "abc",
         [
             TodoItem("执行 Text2SQL 查询", "in_progress")
@@ -474,7 +498,7 @@ def test_runtime_scopes_tools_prompt_and_load_skill_by_bot(tmp_path):
         api_key="not-needed",
         session_db_path=tmp_path / "sessions.sqlite",
     )
-    bot = runtime.bot_registry.get("data_analyst")
+    bot = runtime.services.bot_registry.get("data_analyst")
 
     tool_names = {tool.name for tool in runtime._build_tools(bot=bot)}
     instructions = runtime._build_instructions("abc", bot=bot)
@@ -492,7 +516,7 @@ def test_runtime_scopes_tools_prompt_and_load_skill_by_bot(tmp_path):
     context = RuntimeContext(
         run_id="abc",
         session_id="abc",
-        model_profile=runtime.model_profile,
+        model_profile=runtime.services.model_profile,
     )
     output = asyncio.run(
         load_skill.on_invoke_tool(

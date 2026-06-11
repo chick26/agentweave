@@ -246,7 +246,7 @@ class AgentService:
         page = max(1, int(page))
         page_size = min(1000, max(1, int(page_size)))
         offset = (page - 1) * page_size
-        artifact = self.runtime.result_store.get_artifact_page(
+        artifact = self.runtime.services.artifact_store.get_artifact_page(
             result_id,
             offset=offset,
             limit=page_size,
@@ -278,7 +278,7 @@ class AgentService:
         session_id: str = "",
         bot_id: str = "",
     ) -> bytes:
-        return self.runtime.result_store.export_csv(
+        return self.runtime.services.artifact_store.export_csv(
             result_id,
             run_id=run_id,
             session_id=session_id,

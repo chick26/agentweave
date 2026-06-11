@@ -2,6 +2,8 @@
 
 import asyncio
 
+import pytest
+
 from agent_runtime.core.compressor import ContextCompressor, emergency_trim, estimate_tokens, micro_compact
 from agent_runtime.memory.memory_manager import MemoryManager
 from agent_runtime.memory.memory_store import MemoryStore
@@ -21,7 +23,10 @@ class FixedCounter:
 
 def test_context_compressor_thresholds():
     messages = [{"role": "user", "content": "x" * 150}]
-    compressor = ContextCompressor(max_tokens=100)
+    compressor = ContextCompressor(
+        context_window=100,
+        safety_margin_tokens=0,
+    )
 
     decision = compressor.decide(messages)
 
@@ -29,6 +34,11 @@ def test_context_compressor_thresholds():
     assert decision.mode == "none"
     assert decision.input_budget == 100
     assert decision.counter == "heuristic"
+
+
+def test_context_compressor_rejects_legacy_max_tokens_alias():
+    with pytest.raises(TypeError):
+        ContextCompressor(max_tokens=100)  # type: ignore[call-arg]
 
 
 def test_context_compressor_emergency_trim_keeps_head_and_tail():

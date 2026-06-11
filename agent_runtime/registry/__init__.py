@@ -1,16 +1,16 @@
 """Manifest and resource discovery for AgentWeave."""
 
+from agent_runtime.registry.agent_registry import AgentRegistry
 from agent_runtime.registry.bot_registry import BotConfig, BotRegistry
-from agent_runtime.registry.skill_registry import (
+from agent_runtime.registry.manifest_models import (
     AgentManifest,
-    AgentRegistry,
     ManifestBase,
     ManifestDomains,
     ManifestExecution,
     ManifestMemory,
     Skill,
-    SkillRegistry,
 )
+from agent_runtime.registry.skill_registry import SkillRegistry
 
 __all__ = [
     "AgentManifest",

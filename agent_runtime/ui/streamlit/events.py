@@ -88,8 +88,8 @@ def extract_detail(event: dict[str, Any]) -> str:
             return f"`{output.get('name', '')}`"
 
     elif stage == "worker_start":
-        skill = event.get("skill", "")
-        detail = f"`{skill}`" if skill else ""
+        subagent = event.get("subagent") or event.get("skill") or ""
+        detail = f"`{subagent}`" if subagent else ""
         task = str(event.get("task") or "")
         if task:
             if len(task) > 60:

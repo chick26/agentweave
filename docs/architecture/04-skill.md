@@ -109,3 +109,6 @@ async def load_skill(ctx, skill_name: str) -> str:
 ## 一句话记住
 
 **Skill 是给 Orchestrator 准备的轻量级指南针——它不执行任何代码，只在需要时被 `load_skill` 临时拉取，把专业方法论注入到当前的对话上下文中。**
+
+后续如果某个 skill 目录携带参考资料或脚本资产，也只作为资源描述存在；真正执行仍必须通过
+subagent extension 注册的 tool 进入 worker 边界。

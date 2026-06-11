@@ -16,6 +16,8 @@
 ## 核心数据结构：AgentRuntime
 
 整个编排器运行时由 `agent_runtime/core/runtime.py` 中的 `AgentRuntime` 类驱动。
+具体依赖装配由 `agent_runtime/core/services.py` 的 `RuntimeServices` 承担，`AgentRuntime`
+保留构造入口和行为方法，内部依赖通过 `runtime.services.*` 显式访问。
 
 当启动应用时，这个类会将所有子系统连接在一起。当前实现的构造入口仍保持直接参数形态，核心依赖包括：
 
@@ -33,24 +35,8 @@ class AgentRuntime:
         memory_enabled: bool | None = None,
         timezone_name: str | None = None,
     ) -> None:
-        self.session_db_path = session_db_path
-        
-        # 挂载各个核心组件
-        self.model_profile = load_model_profile(...)
-        
-        self.skill_registry = SkillRegistry(skills_root=self.root / "skills")
-        self.agent_registry = AgentRegistry(subagents_root=self.root / "subagents")
-        self.bot_registry = BotRegistry(bots_root=self.root / "bots", ...)
-        
-        self.memory_manager = MemoryManager(...)
-        self.result_store = ResultStore(self.data_dir / "agent_results.sqlite")
-        
-        # 隔离执行桥梁
-        self.subagent_runner = SubagentRunner(...)
-        
-        # 上下文压缩和 Hook
-        self.compressor = ContextCompressor(model=...)
-        self.hook_runner = HookRunner(...)
+        self.services = RuntimeServices.build(...)
+        self.validate_subagents = ...
 ```
 
 ## Bot 配置与能力裁剪
@@ -68,7 +54,7 @@ class AgentRuntime:
 - `SessionStart` welcome 只读取当前 Bot 的 welcome 配置。
 - `welcome.preset: true` 时，`SessionStart` 用 Bot 的 `welcome.prompt` 和已挂载能力描述生成欢迎词；未开启时只展示静态欢迎文案和能力列表。
 
-没有显式配置时，后端生成 `default` Bot，兼容“加载全部能力”的旧行为。
+没有显式配置时，后端生成 `default` Bot，聚合当前全部已接入能力。
 
 ## Agent 循环：ask() 的生命周期
 
@@ -89,29 +75,10 @@ async def ask(
     bot_id: str = "default",
 ) -> dict:
     
-    context = OrchestratorContext(...)
-    session = SQLiteSession(session_id, str(self.session_db_path))
-    
-    # 1. 压缩历史消息
-    prior_messages = session.get_messages()
-    compressed_messages = await self.compressor.compress(prior_messages, ...)
-    
-    # 2. 构建 Agent 实例 (包含 System Prompt 和 Tools)
-    agent = Agent[OrchestratorContext](
-        name="Agent Orchestrator",
-        instructions=self._build_instructions(session_id, ..., bot=bot),
-        model=build_model(profile, ...),
-        tools=self._build_tools(bot=bot),
-    )
-    
-    # 3. 运行主循环
-    result = await Runner.run(
-        agent, 
-        user_input, 
-        context=context, 
-        session=session, 
-        max_turns=max_turns
-    )
+    context = self._build_run_context(...)
+    session = await self._prepare_session(...)
+    agent = self._build_orchestrator_agent(...)
+    result = await self._run_orchestrator_agent(...)
     
     return {"answer": result.final_answer, ...}
 ```

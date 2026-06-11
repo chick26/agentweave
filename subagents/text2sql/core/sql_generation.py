@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -11,6 +12,9 @@ from agent_runtime.subagent_api import SubagentContext
 from subagents.text2sql.core.domain_catalog import DomainConfig, business_metrics_to_prompt
 from subagents.text2sql.core.prompts import SQL_GENERATION_PROMPT
 from subagents.text2sql.core.sql_safety import validate_sql_uses_selected_schema
+
+
+DEFAULT_SQL_GENERATION_MODEL = "qwen3-32b"
 
 
 async def generate_sql(
@@ -49,16 +53,19 @@ async def generate_sql(
             ),
         },
     ]
+    model_name = sql_generation_model_name()
     ctx.trace(
         stage="sql_prompt",
         title="构建 SQL 提示词",
         input=messages,
         output=None,
+        model_name=model_name,
     )
     raw_output = await ctx.call_model(
         messages=messages,
         title="SQL 生成模型调用",
         kind="sql_model",
+        model_name=model_name,
     )
     ctx.trace(
         stage="sql_model_output",
@@ -93,6 +100,13 @@ async def generate_sql(
         "raw_output": raw_output,
         "validation_error": validation_error,
     }
+
+
+def sql_generation_model_name() -> str:
+    return (
+        os.getenv("TEXT2SQL_SQL_MODEL", DEFAULT_SQL_GENERATION_MODEL).strip()
+        or DEFAULT_SQL_GENERATION_MODEL
+    )
 
 
 def extract_sql(content: str) -> str:

@@ -56,7 +56,8 @@ st.title("AgentWeave")
 @st.cache_data(show_spinner=False)
 def get_bot_options() -> list[dict[str, str]]:
     from agent_runtime.registry.bot_registry import BotRegistry
-    from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
+    from agent_runtime.registry.agent_registry import AgentRegistry
+    from agent_runtime.registry.skill_registry import SkillRegistry
 
     registry = BotRegistry(
         bots_root=ROOT / "bots",
@@ -111,6 +112,11 @@ def get_domains_signature(domain_configs_root: Path) -> tuple[tuple[str, int, in
 
 def get_secret_fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def _new_session_id(*, bot_id: str, memory_enabled: bool) -> str:
+    memory_scope = "mem" if memory_enabled else "nomem"
+    return f"streamlit-{bot_id}-{memory_scope}-{uuid.uuid4()}"
 
 
 @st.cache_resource(show_spinner=False)
@@ -262,11 +268,28 @@ if reload_resources_requested:
 
 
 if "session_id" not in st.session_state:
-    st.session_state.session_id = f"streamlit-{selected_bot_id}-{uuid.uuid4()}"
+    st.session_state.session_id = _new_session_id(
+        bot_id=selected_bot_id,
+        memory_enabled=memory_enabled,
+    )
 
-if st.session_state.get("active_bot_id") != selected_bot_id:
+scope_initialized = (
+    "active_bot_id" in st.session_state
+    and "active_memory_enabled" in st.session_state
+)
+if not scope_initialized:
     st.session_state.active_bot_id = selected_bot_id
-    st.session_state.session_id = f"streamlit-{selected_bot_id}-{uuid.uuid4()}"
+    st.session_state.active_memory_enabled = memory_enabled
+elif (
+    st.session_state.get("active_bot_id") != selected_bot_id
+    or st.session_state.get("active_memory_enabled") != memory_enabled
+):
+    st.session_state.active_bot_id = selected_bot_id
+    st.session_state.active_memory_enabled = memory_enabled
+    st.session_state.session_id = _new_session_id(
+        bot_id=selected_bot_id,
+        memory_enabled=memory_enabled,
+    )
     st.session_state.pop("messages", None)
     st.session_state.model_log_runs = []
     st.session_state.event_runs = []

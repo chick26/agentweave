@@ -8,7 +8,9 @@ Agent 的强大不取决于 `while True` 循环写得多复杂，而取决于它
 
 在这个框架里，无论是底层的基础能力（如记笔记），还是高阶的业务能力（如 Text2SQL 子代理），都会被抽象成 **Tool** 喂给 Orchestrator。
 
-为了避免硬编码，系统实现了**基于 Manifest（声明文件）的注册发现机制**：
+为了避免硬编码，系统实现了**基于 Manifest（声明文件）的注册发现机制**。
+Manifest model、parser 和 registry 是分层的：model 只描述数据结构，parser 只负责读文件和校验，
+registry 只负责发现、缓存和 prompt-facing 输出。
 
 1. **AgentRegistry**: 负责扫描严格格式的子代理（`subagents/*/AGENT.yaml + prompt.md`）。
 2. **SkillRegistry**: 负责扫描技能方法卡（`skills/*/SKILL.md`）。
@@ -45,6 +47,10 @@ class ManifestBase:
 `capabilities`、`policies` 和 `output_contract` 是 subagent 的治理声明；框架只透传，实际业务策略仍由 extension/tool 执行。
 本地测试环境、生产连接方式和所需环境变量统一放在项目级 `docs/environment/`，
 不放入 subagent 包，也不进入模型上下文。
+
+`ArtifactStore` 是通用 artifact store。默认 artifact preview 是
+`{"kind": "rows"}` 表格预览；后续图表、文件或报告可以使用同一个 preview envelope
+暴露 `chart_spec`、`asset` 等非表格预览，而不改变现有 SQL/RAG 分页和 CSV 能力。
 
 ## AgentRegistry 与意图路由
 
@@ -121,4 +127,4 @@ Orchestrator 以为自己只是调了一个普通的函数，但实际上这个�
 
 ## 一句话记住
 
-**工具系统的设计哲学是声明式发现 + 动态注入：`AGENT.yaml + prompt.md` / `SKILL.md` 声明能力，Registry 发现并注入到 prompt 或 tool list，Orchestrator 按需调用。**
+**工具系统的设计哲学是声明式发现 + 动态注入：`AGENT.yaml + prompt.md` / `SKILL.md` 声明能力，Registry 发现并注入到 prompt 或 tool list，Orchestrator 按需调用；大结果统一进入 artifact store。**

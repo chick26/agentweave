@@ -10,7 +10,9 @@ from typing import Any
 from agent_runtime.common import file_signature
 from agent_runtime.worker.subagent_extensions import clear_subagent_extension_cache
 from agent_runtime.registry.bot_registry import BotConfig, BotRegistry
-from agent_runtime.registry.skill_registry import AgentManifest, AgentRegistry, Skill, SkillRegistry
+from agent_runtime.registry.agent_registry import AgentRegistry
+from agent_runtime.registry.manifest_models import AgentManifest, Skill
+from agent_runtime.registry.skill_registry import SkillRegistry
 
 
 @dataclass(frozen=True)

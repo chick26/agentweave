@@ -9,10 +9,10 @@
 主链路：
 
 1. `AgentRegistry` 扫描 `subagents/*/AGENT.yaml` 和 `prompt.md`。
-2. `SubagentRunner` 按 bot 配置把 subagent 包装为隔离 worker tool。
+2. `SubagentRunner` 按 bot 配置创建隔离 worker run，并通过 worker agent factory 把 subagent 包装为顶层 delegated tool。
 3. `extension.py register(api)` 注册工具、ResultFormatter、readiness check 和 prompt context。
 4. worker 只通过自己的局部 tools 访问专业资源。
-5. 大结果通过 `ResultStore` 保存为标准 artifact envelope。
+5. 大结果通过 `ArtifactStore` 保存为标准 artifact envelope。
 6. 环境准备、样例数据和离线 prepare CLI 放在项目级目录，不进入 subagent 包。
 
 ## 当前目录职责
@@ -50,6 +50,11 @@
 
 - 当前 Text2SQL/RAG extension 注册 tools、ResultFormatter、readiness check 和 prompt context。
 - 当前 Text2SQL/RAG extension 的 subagent-local tools 已显式绑定 `capability`、`policy_path` 和 `audit_name`，事件流可审计具体能力与策略快照。
+- 普通低风险 extension tool 可以只写 `api.tool(fn)`；框架会默认生成 `<subagent>.tool.<tool>` capability 和 `<subagent>.<tool>` audit name。
+- 只有显式传入 `capability` 的工具才要求该 capability 出现在 `AGENT.yaml` 的 `capabilities` 中；显式传入 `policy_path` 时仍必须能在 `policies` 中解析。
+- `SubagentContext` 只暴露 worker 运行所需的窄接口：run/time/root、manifest、policies、typed state、trace、model call、embedding client 和 artifact store。
+- `SubagentContext` 额外提供只读 artifact metadata/page 访问，用当前 session/bot scope 读取同会话结果，为后续分析型 subagent 串联 ArtifactStore 做准备。
+- `SubagentContext` 不再暴露裸 `cache`、`capabilities`、`output_contract`、model/embedding profile、SQL 专属存储入口或手动 result event；`_runtime_context` 只供 `tool_start` / `tool_finish` adapter 内部使用。
 - 仅回显 manifest 的 `capability_resolver` 已从 Text2SQL/RAG 移除；静态能力以 `AGENT.yaml` 为准。
 - 如果未来需要动态能力解析，再通过 `api.capability_resolver(...)` 注册真实动态 payload。
 
@@ -66,7 +71,12 @@
 - 已移除 `TEXT2SQL_STRICT_SCHEMA_VALIDATION`，schema 校验策略统一读取 `AGENT.yaml` 的 `policies.db.require_schema_validation`。
 - 已将 Text2SQL `execute_sql` 的行数、样例数、schema validation 和 SQLite 查询超时收口到 `policies.db`。
 - 已将 RAG search/summary 绑定到 `rag.search` capability 和 `policies.rag`。
+- 已将 worker agent 构建和结果归一从 `SubagentRunner` 拆出，runner 保留生命周期和隔离边界职责。
+- 已允许普通 extension tool 省略 capability/audit 声明，由框架补齐默认审计元数据。
+- 已直接收窄 `SubagentContext` 公共 API，移除未使用的 runtime-like 能力入口。
 - 已新增边界测试，防止 subagent 重新引入 `ENVIRONMENT.md`、`data/` 或 `prepare/`。
+- 已统一 subagent dispatch/complete 事件 payload 使用 `subagent` 字段，不再新写 `skill` 别名。
+- 已为 extension 增加只读 artifact 访问方法；subagent 仍不得导入 runtime/storage 内部模块。
 
 ### 待确认问题
 

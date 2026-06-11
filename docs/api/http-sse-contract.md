@@ -205,7 +205,7 @@ Response `200`:
 
 ### `GET /results/{result_id}?page=1&page_size=100`
 
-分页读取 ResultStore artifact。前端不可依赖聊天回答里的完整行数据，大结果必须通过本接口读取。
+分页读取 ArtifactStore artifact。前端不可依赖聊天回答里的完整行数据，大结果必须通过本接口读取。
 
 Response `200`:
 
@@ -246,7 +246,7 @@ Response `200`:
 
 ### `GET /results/{result_id}.csv`
 
-导出 ResultStore 中已保存的 row-shaped artifact。
+导出 ArtifactStore 中已保存的 row-shaped artifact。
 
 Response `200`:
 
@@ -316,7 +316,7 @@ Response `200`:
 
 后端还会额外派生 Web 友好的 SSE 事件：
 
-- `result_created`：从 runtime `result_created` 提炼出标准 ResultStore artifact envelope。
+- `result_created`：从 runtime `result_created` 提炼出标准 ArtifactStore artifact envelope。
 - `model_delta`：模型输出增量，包含 `kind/stage/title/model/delta` 元信息；后端不判断展示位置。
 - `run_complete`：run 成功结束，包含最终 `answer` 和 `result_ids`。
 - `run_error`：run 失败结束，包含 `error`、`message` 和可选 `diagnostic_run_id`。
@@ -349,7 +349,7 @@ Response `200`:
 
 ### `result_created`
 
-提示前端出现可查看的 ResultStore artifact。
+提示前端出现可查看的 ArtifactStore artifact。
 
 ```json
 {

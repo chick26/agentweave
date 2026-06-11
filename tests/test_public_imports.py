@@ -1,4 +1,4 @@
-"""Tests for public import aliases and package surface compatibility."""
+"""Tests for public import surfaces after breaking cleanup."""
 
 import importlib
 import sys
@@ -21,7 +21,7 @@ def test_agent_runtime_package_level_api_exports_common_types() -> None:
         EventBus,
         EventKind,
         MemoryManager,
-        ResultStore,
+        ArtifactStore,
         RuntimeContext,
         SkillRegistry,
         SqlDatabaseBackend,
@@ -33,7 +33,7 @@ def test_agent_runtime_package_level_api_exports_common_types() -> None:
     assert EventBus.__name__ == "EventBus"
     assert EventKind.AGENT_START.value == "agent_start"
     assert MemoryManager.__name__ == "MemoryManager"
-    assert ResultStore.__name__ == "ResultStore"
+    assert ArtifactStore.__name__ == "ArtifactStore"
     assert RuntimeContext.__name__ == "RuntimeContext"
     assert SkillRegistry.__name__ == "SkillRegistry"
     assert SqlDatabaseBackend.__name__ == "SqlDatabaseBackend"
@@ -46,7 +46,9 @@ def test_new_layered_public_paths_are_available() -> None:
     from agent_runtime.core.result_formatters import ResultArtifactSpec, ResultFormatterRegistry
     from agent_runtime.hooks.session_start import SessionStartContext
     from agent_runtime.memory.memory_manager import MemoryManager
-    from agent_runtime.registry.skill_registry import AgentRegistry
+    from agent_runtime.registry.agent_registry import AgentRegistry as SplitAgentRegistry
+    from agent_runtime.registry.manifest_models import AgentManifest as SplitAgentManifest
+    from agent_runtime.registry.agent_registry import AgentRegistry
     from agent_runtime.registry.bot_registry import BotRegistry
     from agent_runtime.storage.database import CsvSQLiteBackend
     from agent_runtime.worker.subagent_runner import SubagentRunner
@@ -61,7 +63,31 @@ def test_new_layered_public_paths_are_available() -> None:
     assert CsvSQLiteBackend.__name__ == "CsvSQLiteBackend"
     assert MemoryManager.__name__ == "MemoryManager"
     assert AgentRegistry.__name__ == "AgentRegistry"
+    assert SplitAgentRegistry is AgentRegistry
+    assert SplitAgentManifest.__name__ == "AgentManifest"
     assert BotRegistry.__name__ == "BotRegistry"
+
+
+def test_legacy_registry_cross_exports_are_removed() -> None:
+    import agent_runtime.registry.skill_registry as skill_registry
+
+    assert hasattr(skill_registry, "SkillRegistry")
+    assert not hasattr(skill_registry, "AgentRegistry")
+    assert not hasattr(skill_registry, "AgentManifest")
+    assert not hasattr(skill_registry, "ManifestBase")
+
+
+def test_legacy_storage_result_store_module_is_removed() -> None:
+    sys.modules.pop("agent_runtime.storage.result_store", None)
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("agent_runtime.storage.result_store")
+
+
+def test_legacy_sqlite_backend_alias_is_removed() -> None:
+    from agent_runtime.storage import database
+
+    assert not hasattr(database, "SQLiteBackend")
 
 
 def test_subagent_api_public_surface_is_available() -> None:
@@ -82,6 +108,40 @@ def test_subagent_api_public_surface_is_available() -> None:
     assert ToolOutput.__name__ == "ToolOutput"
     assert callable(subagent_context)
     assert callable(tool)
+
+
+def test_subagent_context_surface_is_intentionally_narrow() -> None:
+    from agent_runtime.subagent_api import SubagentContext
+
+    expected = {
+        "call_model",
+        "embedding_client",
+        "get_artifact",
+        "get_artifact_page",
+        "manifest",
+        "policies",
+        "run_id",
+        "runtime_root",
+        "store_artifact",
+        "timezone_name",
+        "trace",
+        "typed_state",
+    }
+    removed = {
+        "cache",
+        "capabilities",
+        "emit_tool_result",
+        "embedding_profile",
+        "model_profile",
+        "output_contract",
+        "result_created",
+        "store_result",
+    }
+
+    for name in expected:
+        assert hasattr(SubagentContext, name)
+    for name in removed:
+        assert not hasattr(SubagentContext, name)
 
 
 @pytest.mark.parametrize(
@@ -130,7 +190,7 @@ def test_shared_facade_public_surface_is_available() -> None:
         "orchestrator",
         "prompts",
         "result_events",
-        "result_store",
+        "artifact_store",
         "runtime_utils",
         "settings",
         "skill_runner",

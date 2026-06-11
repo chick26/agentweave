@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from openai import OpenAI
 
 from agent_runtime.core.hooks import HookHandler, HookResult
 from agent_runtime.registry.bot_registry import DEFAULT_WELCOME_MESSAGE
-from agent_runtime.registry.skill_registry import AgentManifest, Skill
+from agent_runtime.registry.manifest_models import AgentManifest, Skill
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,8 @@ def generate_welcome_message(
     client = OpenAI(
         base_url=context.welcome_model_base_url,
         api_key=context.welcome_model_api_key or "not-needed",
+        timeout=float(os.getenv("OPENAI_CLIENT_TIMEOUT", "60")),
+        max_retries=int(os.getenv("OPENAI_CLIENT_MAX_RETRIES", "2")),
     )
     response = client.chat.completions.create(
         model=context.welcome_model_name,

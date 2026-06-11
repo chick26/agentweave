@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from agent_runtime.registry.bot_registry import BotRegistry
-from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
+from agent_runtime.registry.agent_registry import AgentRegistry
+from agent_runtime.registry.skill_registry import SkillRegistry
 
 
 def _write(path: Path, text: str) -> None:

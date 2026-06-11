@@ -16,7 +16,7 @@ from agent_runtime.core.context import RuntimeContext
 from agent_runtime.core.result_formatters import ResultFormatter, ResultFormatterRegistry
 from agent_runtime.core.tool_helpers import emit_tool_finish, emit_tool_start
 from agent_runtime.core.tool_helpers import ToolOutput
-from agent_runtime.registry.skill_registry import AgentManifest
+from agent_runtime.registry.manifest_models import AgentManifest
 
 
 PromptContextFn = Callable[[AgentManifest], dict[str, Any] | None]
@@ -147,13 +147,14 @@ class SubagentExtensionAPI:
     ) -> ToolPolicyBinding:
         clean_capability = str(capability or "").strip()
         clean_policy_path = str(policy_path or "").strip()
-        clean_audit_name = str(audit_name or "").strip() or tool_name
+        clean_audit_name = (
+            str(audit_name or "").strip()
+            or f"{self.manifest.name}.{tool_name}"
+        )
+        explicit_capability = bool(clean_capability)
         if not clean_capability:
-            raise ValueError(
-                f"Subagent `{self.manifest.name}` tool `{tool_name}` must declare "
-                "a capability."
-            )
-        if clean_capability not in self.manifest.capabilities:
+            clean_capability = f"{self.manifest.name}.tool.{tool_name}"
+        if explicit_capability and clean_capability not in self.manifest.capabilities:
             raise ValueError(
                 f"Subagent `{self.manifest.name}` tool `{tool_name}` declares unknown "
                 f"capability `{clean_capability}`."

@@ -11,19 +11,22 @@ from agent_runtime.core.context import RuntimeContext
 from agent_runtime.core.model_profiles import ModelProfile
 from agent_runtime.core.runtime_utils import LoggingOpenAIChatCompletionsModel
 from agent_runtime.worker.subagent_runner import (
-    SubagentResult,
     SubagentRunner,
     WORKER_MAX_TURNS,
+)
+from agent_runtime.worker.result_normalizer import (
+    SubagentResult,
     _coerce_subagent_result,
     _subagent_tool_payload,
 )
 from agent_runtime.worker.subagent_extensions import (
     load_subagent_extension,
     resolve_extension_capabilities,
+    resolve_tool_audit_metadata,
 )
 from agent_runtime.memory.memory_manager import MemoryManager
 from agent_runtime.memory.memory_store import MemoryStore
-from agent_runtime.registry.skill_registry import AgentRegistry
+from agent_runtime.registry.agent_registry import AgentRegistry
 
 
 def _registry() -> AgentRegistry:
@@ -314,7 +317,7 @@ def test_extension_tool_policy_rejects_unknown_capability(tmp_path, monkeypatch)
         load_subagent_extension(AgentRegistry(subagents_root=subagents_root).get("bad_capability_worker"))
 
 
-def test_extension_tool_policy_requires_capability(tmp_path, monkeypatch):
+def test_extension_tool_policy_defaults_capability_and_audit_name(tmp_path, monkeypatch):
     subagents_root = tmp_path / "subagents"
     subagent_dir = subagents_root / "missing_capability_worker"
     subagent_dir.mkdir(parents=True)
@@ -338,11 +341,55 @@ def test_extension_tool_policy_requires_capability(tmp_path, monkeypatch):
     )
     (subagent_dir / "prompt.md").write_text("Missing capability prompt.\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
+    registry = AgentRegistry(subagents_root=subagents_root)
+    manifest = registry.get("missing_capability_worker")
 
-    with pytest.raises(ValueError, match="must declare a capability"):
-        load_subagent_extension(
-            AgentRegistry(subagents_root=subagents_root).get("missing_capability_worker")
+    extension = load_subagent_extension(manifest)
+
+    binding = extension.tool_policies["missing_capability_tool"]
+    assert binding.capability == "missing_capability_worker.tool.missing_capability_tool"
+    assert binding.policy_path == ""
+    assert binding.audit_name == "missing_capability_worker.missing_capability_tool"
+    assert resolve_tool_audit_metadata(
+        manifest=manifest,
+        tool_name="missing_capability_tool",
+    ) == {
+        "subagent": "missing_capability_worker",
+        "tool": "missing_capability_tool",
+        "capability": "missing_capability_worker.tool.missing_capability_tool",
+        "policy_path": "",
+        "policy_snapshot": {},
+        "audit_name": "missing_capability_worker.missing_capability_tool",
+        "scoped": True,
+    }
+
+    runner = SubagentRunner(registry=registry, root=tmp_path)
+    tool = runner._build_subagent_tools(manifest)[0]
+    context = RuntimeContext(
+        run_id="default-policy-run",
+        session_id="default-policy-session",
+        model_profile=_model_profile(),
+        agent_registry=registry,
+        active_subagent="missing_capability_worker",
+    )
+
+    asyncio.run(
+        tool.on_invoke_tool(
+            ToolContext(
+                context=context,
+                tool_name="missing_capability_tool",
+                tool_call_id="call_default_policy",
+                tool_arguments="{}",
+            ),
+            "{}",
         )
+    )
+
+    start_payload = context.events[0]["payload"]
+    result_payload = context.events[1]["payload"]
+    assert start_payload["capability"] == "missing_capability_worker.tool.missing_capability_tool"
+    assert start_payload["policy_path"] == ""
+    assert result_payload["metadata"]["audit_name"] == "missing_capability_worker.missing_capability_tool"
 
 
 def test_extension_tool_policy_rejects_unknown_policy_path(tmp_path, monkeypatch):

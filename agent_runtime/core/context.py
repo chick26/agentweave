@@ -23,7 +23,7 @@ class RuntimeContext:
     session_id: str = ""
     bot_id: str = "default"
     parent_run_id: str = ""
-    result_store: Any | None = None
+    artifact_store: Any | None = None
     result_formatters: Any | None = None
     events: list[dict[str, Any]] = field(default_factory=list)
     event_callback: Callable[[dict[str, Any]], None] | None = None
@@ -44,8 +44,8 @@ class RuntimeContext:
                 self.session_id = self.parent.session_id
             if self.bot_id == "default":
                 self.bot_id = self.parent.bot_id
-            if self.result_store is None:
-                self.result_store = self.parent.result_store
+            if self.artifact_store is None:
+                self.artifact_store = self.parent.artifact_store
             if self.result_formatters is None:
                 self.result_formatters = self.parent.result_formatters
             if self.runtime_root is None:
@@ -89,7 +89,7 @@ class RuntimeContext:
             bot_id=self.bot_id,
             parent_run_id=parent_run_id if parent_run_id is not None else self.run_id,
             model_profile=self.model_profile,
-            result_store=self.result_store,
+            artifact_store=self.artifact_store,
             result_formatters=self.result_formatters,
             timezone_name=self.timezone_name,
             state=child_state,

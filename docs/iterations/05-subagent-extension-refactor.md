@@ -50,7 +50,7 @@ Text2SQL 当前包结构采用 `extension.py + core/ + domain_catalog.yaml`。ex
 - `.agentweave/text2sql.sqlite`
 - `.agentweave/rag_index.json`
 - `.agentweave/agent_memory.sqlite`
-- `.agentweave/agent_results.sqlite`
+- `.agentweave/agent_artifacts.sqlite`
 - `.agentweave/streamlit_sessions.sqlite`
 
 这样主框架保持轻量，subagent 可以按自己的需要切换 SQLite、真实数据库、本地 JSON index 或外部向量库。

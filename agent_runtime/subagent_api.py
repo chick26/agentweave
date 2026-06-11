@@ -18,9 +18,9 @@ from agent_runtime.core.runtime_utils import call_chat_model, make_async_client
 from agent_runtime.core.tool_helpers import emit_tool_finish as _emit_tool_finish
 from agent_runtime.core.tool_helpers import emit_tool_start as _emit_tool_start
 from agent_runtime.core.tool_helpers import ToolOutput
-from agent_runtime.shared.embeddings import EmbeddingClient, EmbeddingProfile
+from agent_runtime.shared.embeddings import EmbeddingClient
 from agent_runtime.shared.manifest import AgentManifest
-from agent_runtime.shared.models import ModelProfile, resolve_manifest_embedding_profile
+from agent_runtime.shared.models import resolve_manifest_embedding_profile
 from agent_runtime.worker.subagent_extensions import SubagentExtensionAPI
 from agent_runtime.worker.subagent_extensions import load_subagent_extension
 
@@ -48,10 +48,6 @@ class SubagentContext:
     def timezone_name(self) -> str:
         return self._ctx.timezone_name
 
-    @property
-    def cache(self) -> dict[str, Any]:
-        return self._ctx.state
-
     def typed_state(self, namespace: str, factory: Callable[[], T]) -> T:
         return self._ctx.get_typed_state(namespace, factory)
 
@@ -63,22 +59,8 @@ class SubagentContext:
         return registry.get(self._ctx.active_subagent)
 
     @property
-    def capabilities(self) -> list[str]:
-        return list(self.manifest.capabilities)
-
-    @property
     def policies(self) -> dict[str, Any]:
         return dict(self.manifest.policies)
-
-    @property
-    def output_contract(self) -> dict[str, Any]:
-        contract = self.manifest.output_contract
-        return {
-            "format": contract.format,
-            "required_fields": list(contract.required_fields),
-            "artifact_types": list(contract.artifact_types),
-            **dict(contract.metadata),
-        }
 
     def trace(
         self,
@@ -98,23 +80,6 @@ class SubagentContext:
         }
         self._ctx.emit_subagent_trace(payload)
 
-    def emit_tool_result(
-        self,
-        *,
-        tool_name: str,
-        output: ToolOutput,
-        status: str = "completed",
-    ) -> None:
-        _emit_tool_finish(
-            self._ctx,
-            tool_name=tool_name,
-            tool_output=output,
-            status=status,
-        )
-
-    def model_profile(self) -> ModelProfile:
-        return self._ctx.model_profile
-
     async def call_model(
         self,
         *,
@@ -122,11 +87,13 @@ class SubagentContext:
         title: str,
         kind: str,
         max_tokens: int | None = None,
+        model_name: str | None = None,
     ) -> str:
-        profile = self.model_profile()
+        profile = self._ctx.model_profile
+        resolved_model_name = str(model_name or profile.model_name)
         return await call_chat_model(
             client=make_async_client(profile),
-            model_name=profile.model_name,
+            model_name=resolved_model_name,
             max_tokens=max_tokens or profile.max_tokens,
             messages=messages,
             title=title,
@@ -139,42 +106,8 @@ class SubagentContext:
 
     def embedding_client(self, manifest: AgentManifest | None = None) -> EmbeddingClient:
         return EmbeddingClient(
-            self.embedding_profile(manifest=manifest),
+            resolve_manifest_embedding_profile(manifest or self.manifest),
         )
-
-    def embedding_profile(self, manifest: AgentManifest | None = None) -> EmbeddingProfile:
-        return resolve_manifest_embedding_profile(
-            manifest or self.manifest,
-        )
-
-    def store_result(
-        self,
-        *,
-        domain: str,
-        sql: str,
-        rows: list[dict[str, Any]],
-        tool_name: str = "",
-        ui_content: dict[str, Any] | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> str:
-        result_store = self._ctx.result_store
-        if result_store is None:
-            return ""
-        result_id = result_store.create_result(
-            run_id=self._ctx.run_id,
-            session_id=self._ctx.session_id,
-            bot_id=self._ctx.bot_id,
-            domain=domain,
-            sql=sql,
-            rows=rows,
-        )
-        if tool_name:
-            self.result_created(
-                tool_name=tool_name,
-                ui_content=ui_content or {"result_id": result_id},
-                metadata=metadata or {"result_id": result_id},
-            )
-        return result_id
 
     def store_artifact(
         self,
@@ -184,8 +117,8 @@ class SubagentContext:
         tool_name: str = "",
         source: str = "",
     ) -> dict[str, Any]:
-        result_store = self._ctx.result_store
-        if result_store is None:
+        artifact_store = self._ctx.artifact_store
+        if artifact_store is None:
             return {}
         registry = self._ctx.result_formatters
         if registry is None:
@@ -205,20 +138,20 @@ class SubagentContext:
             "subagent": self._ctx.active_subagent,
         }
         artifact = registry.format(artifact_type, formatter_payload)
-        result_id = result_store.create_artifact(
+        result_id = artifact_store.create_artifact(
             run_id=self._ctx.run_id,
             artifact=artifact,
             session_id=self._ctx.session_id,
             bot_id=self._ctx.bot_id,
         )
-        result = result_store.get_metadata(
+        result = artifact_store.get_metadata(
             result_id,
             run_id=self._ctx.run_id,
             session_id=self._ctx.session_id,
             bot_id=self._ctx.bot_id,
         )
         if tool_name:
-            self.result_created(
+            self._emit_result_created(
                 tool_name=tool_name,
                 ui_content=result,
                 metadata=result.get("metadata", {}),
@@ -226,7 +159,39 @@ class SubagentContext:
             )
         return result
 
-    def result_created(
+    def get_artifact(self, result_id: str) -> dict[str, Any]:
+        """Read artifact metadata within the current session/bot scope."""
+
+        artifact_store = self._ctx.artifact_store
+        if artifact_store is None:
+            raise RuntimeError("ArtifactStore is unavailable.")
+        return artifact_store.get_artifact(
+            result_id,
+            session_id=self._ctx.session_id,
+            bot_id=self._ctx.bot_id,
+        )
+
+    def get_artifact_page(
+        self,
+        result_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Read a paged row preview within the current session/bot scope."""
+
+        artifact_store = self._ctx.artifact_store
+        if artifact_store is None:
+            raise RuntimeError("ArtifactStore is unavailable.")
+        return artifact_store.get_artifact_page(
+            result_id,
+            offset=offset,
+            limit=limit,
+            session_id=self._ctx.session_id,
+            bot_id=self._ctx.bot_id,
+        )
+
+    def _emit_result_created(
         self,
         *,
         tool_name: str,
@@ -283,9 +248,10 @@ def tool_finish(
     output: ToolOutput,
     status: str = "completed",
 ) -> None:
-    subagent_context(ctx).emit_tool_result(
+    _emit_tool_finish(
+        subagent_context(ctx)._runtime_context,
         tool_name=tool_name,
-        output=output,
+        tool_output=output,
         status=status,
     )
 

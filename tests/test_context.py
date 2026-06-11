@@ -1,10 +1,12 @@
 """Tests for unified runtime context event emission and child isolation."""
 
+import asyncio
 from dataclasses import dataclass
 
 from agent_runtime.core.context import RuntimeContext
 from agent_runtime.core.events import EventKind
 from agent_runtime.core.model_profiles import ModelProfile
+from agent_runtime.subagent_api import SubagentContext
 
 
 def _model_profile() -> ModelProfile:
@@ -44,7 +46,7 @@ def test_child_context_inherits_runtime_resources_and_shares_events(tmp_path):
         run_id="session-1",
         session_id="session-1",
         model_profile=_model_profile(),
-        result_store=object(),
+        artifact_store=object(),
         timezone_name="UTC",
         runtime_root=tmp_path,
         state={"tenant": "demo"},
@@ -61,7 +63,7 @@ def test_child_context_inherits_runtime_resources_and_shares_events(tmp_path):
     assert child.parent is parent
     assert child.session_id == "session-1"
     assert child.parent_run_id == "session-1"
-    assert child.result_store is parent.result_store
+    assert child.artifact_store is parent.artifact_store
     assert child.timezone_name == "UTC"
     assert child.runtime_root == tmp_path
     assert child.active_subagent == "text2sql"
@@ -111,3 +113,44 @@ def test_child_context_does_not_inherit_parent_typed_state():
 
     assert child_state is not parent_state
     assert child_state.value == ""
+
+
+def test_subagent_context_call_model_allows_model_name_override(monkeypatch):
+    seen = {}
+
+    def fake_make_async_client(profile):
+        seen["profile"] = profile
+        return object()
+
+    async def fake_call_chat_model(**kwargs):
+        seen["kwargs"] = kwargs
+        return "ok"
+
+    monkeypatch.setattr("agent_runtime.subagent_api.make_async_client", fake_make_async_client)
+    monkeypatch.setattr("agent_runtime.subagent_api.call_chat_model", fake_call_chat_model)
+    profile = ModelProfile(
+        base_url="http://chat.example/v1",
+        model_name="qwen3.6-27b",
+        api_key="secret",
+        max_tokens=128,
+    )
+    context = SubagentContext(
+        RuntimeContext(
+            run_id="run-1",
+            model_profile=profile,
+        )
+    )
+
+    result = asyncio.run(
+        context.call_model(
+            messages=[{"role": "user", "content": "生成 SQL"}],
+            title="SQL 生成模型调用",
+            kind="sql_model",
+            model_name="qwen3-32b",
+        )
+    )
+
+    assert result == "ok"
+    assert seen["profile"] is profile
+    assert seen["kwargs"]["model_name"] == "qwen3-32b"
+    assert seen["kwargs"]["max_tokens"] == 128

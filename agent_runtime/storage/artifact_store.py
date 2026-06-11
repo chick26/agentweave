@@ -1,4 +1,4 @@
-"""SQLite result store for large tool outputs and CSV export."""
+"""SQLite artifact store for large tool outputs and CSV export."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ from agent_runtime.common import columns_from_rows, utc_now_iso
 from agent_runtime.core.result_formatters import ResultArtifactSpec
 
 
-class ResultStore:
-    """SQLite-backed store for row-shaped result artifacts.
+class ArtifactStore:
+    """SQLite-backed store for row-shaped and previewable artifacts.
 
     Worker tools return compact pointers and previews to the model. Full rows
     live here for UI pagination, SSE result chips, diagnostics, and CSV export.
@@ -31,37 +31,6 @@ class ResultStore:
         self._connection.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         self._init_schema()
-
-    def create_result(
-        self,
-        *,
-        run_id: str,
-        session_id: str = "",
-        bot_id: str = "",
-        domain: str,
-        sql: str,
-        rows: list[dict[str, Any]],
-    ) -> str:
-        """Create a SQL result artifact using the standard artifact store."""
-        return self.create_artifact(
-            run_id=run_id,
-            artifact=ResultArtifactSpec(
-                artifact_type="sql_result",
-                title="SQL Result",
-                source="execute_sql",
-                rows=rows,
-                columns=columns_from_rows(rows),
-                preview_rows=rows[:5],
-                metadata={
-                    "domain": domain,
-                    "sql": sql,
-                },
-                row_count=len(rows),
-                row_count_is_exact=True,
-            ),
-            session_id=session_id,
-            bot_id=bot_id,
-        )
 
     def create_artifact(
         self,
@@ -81,10 +50,10 @@ class ResultStore:
                 """
                 INSERT INTO result_artifacts (
                     id, run_id, artifact_type, source, title,
-                    columns_json, metadata_json, row_count, row_count_is_exact,
+                    columns_json, preview_json, metadata_json, row_count, row_count_is_exact,
                     session_id, bot_id, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     result_id,
@@ -93,6 +62,7 @@ class ResultStore:
                     normalized.source,
                     normalized.title,
                     json.dumps(normalized.columns, ensure_ascii=False),
+                    json.dumps(normalized.preview, ensure_ascii=False, default=str),
                     json.dumps(metadata, ensure_ascii=False, default=str),
                     normalized.row_count,
                     1 if normalized.row_count_is_exact else 0,
@@ -157,7 +127,7 @@ class ResultStore:
                 """
                 SELECT
                     id, run_id, artifact_type, source, title,
-                    columns_json, metadata_json, row_count, row_count_is_exact,
+                    columns_json, preview_json, metadata_json, row_count, row_count_is_exact,
                     session_id, bot_id, created_at
                 FROM result_artifacts
                 WHERE id = ?
@@ -167,7 +137,9 @@ class ResultStore:
         if row is None:
             raise KeyError(f"Unknown result_id: {result_id}")
         _assert_scope(row, run_id=run_id, session_id=session_id, bot_id=bot_id)
+        preview = json.loads(row["preview_json"] or "{}")
         preview_rows = self._get_page_rows(result_id, offset=0, limit=5)
+        stored_count = self._count_rows(result_id)
         metadata = json.loads(row["metadata_json"] or "{}")
         artifact = ResultArtifactSpec(
             artifact_type=row["artifact_type"],
@@ -176,6 +148,7 @@ class ResultStore:
             rows=[],
             columns=json.loads(row["columns_json"] or "[]"),
             preview_rows=preview_rows,
+            preview=preview,
             metadata=metadata,
             row_count=row["row_count"],
             row_count_is_exact=bool(row["row_count_is_exact"]),
@@ -183,7 +156,7 @@ class ResultStore:
         summary = artifact.to_summary(
             result_id=result_id,
             created_at=row["created_at"],
-            stored_count=row["row_count"],
+            stored_count=stored_count,
         )
         summary.update(
             {
@@ -233,24 +206,6 @@ class ResultStore:
             "rows": rows,
         }
 
-    def get_page(
-        self,
-        result_id: str,
-        *,
-        offset: int = 0,
-        limit: int = 50,
-        run_id: str = "",
-        session_id: str = "",
-        bot_id: str = "",
-    ) -> list[dict[str, Any]]:
-        self.get_metadata(
-            result_id,
-            run_id=run_id,
-            session_id=session_id,
-            bot_id=bot_id,
-        )
-        return self._get_page_rows(result_id, offset=offset, limit=limit)
-
     def _get_page_rows(
         self,
         result_id: str,
@@ -272,6 +227,14 @@ class ResultStore:
                 (result_id, limit, offset),
             ).fetchall()
         return [json.loads(row["row_json"]) for row in rows]
+
+    def _count_rows(self, result_id: str) -> int:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT COUNT(*) AS count FROM result_artifact_rows WHERE result_id = ?",
+                (result_id,),
+            ).fetchone()
+        return int(row["count"] or 0) if row is not None else 0
 
     def export_csv(
         self,
@@ -318,6 +281,7 @@ class ResultStore:
                     source TEXT NOT NULL,
                     title TEXT NOT NULL,
                     columns_json TEXT NOT NULL,
+                    preview_json TEXT NOT NULL DEFAULT '{}',
                     metadata_json TEXT NOT NULL,
                     row_count INTEGER NOT NULL,
                     row_count_is_exact INTEGER NOT NULL DEFAULT 1,
@@ -356,13 +320,14 @@ class ResultStore:
         }
         if not columns:
             return
-        expected = {
+        expected_required = {
             "id",
             "run_id",
             "artifact_type",
             "source",
             "title",
             "columns_json",
+            "preview_json",
             "metadata_json",
             "row_count",
             "row_count_is_exact",
@@ -370,7 +335,7 @@ class ResultStore:
             "bot_id",
             "created_at",
         }
-        if columns != expected:
+        if columns != expected_required:
             self._connection.execute("DROP TABLE IF EXISTS result_artifact_rows")
             self._connection.execute("DROP TABLE IF EXISTS result_artifacts")
 
@@ -388,7 +353,7 @@ class ResultStore:
         return len(result_ids)
 
     def _opportunistic_cleanup(self) -> None:
-        raw_ttl = os.environ.get("SQL_RESULT_TTL_HOURS", "").strip()
+        raw_ttl = os.environ.get("ARTIFACT_TTL_HOURS", "").strip()
         if not raw_ttl:
             return
         try:

@@ -8,7 +8,7 @@ from typing import Any
 
 from agent_runtime.memory.embeddings import EmbeddingClient
 from agent_runtime.memory.memory_store import MemoryRecord, MemoryStore
-from agent_runtime.registry.skill_registry import ManifestBase
+from agent_runtime.registry.manifest_models import ManifestBase
 
 @dataclass(frozen=True)
 class MemorySearchResult:

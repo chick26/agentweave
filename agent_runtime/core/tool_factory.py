@@ -22,7 +22,7 @@ class TodoToolItem(BaseModel):
 def build_runtime_tools(runtime: Any, *, bot: Any | None = None) -> list[Any]:
     """Build orchestrator tools without making AgentRuntime own tool internals."""
 
-    bot = bot or runtime.bot_registry.get("default")
+    bot = bot or runtime.services.bot_registry.get("default")
     allowed_skills = set(bot.skills)
 
     @function_tool
@@ -53,7 +53,7 @@ def build_runtime_tools(runtime: Any, *, bot: Any | None = None) -> list[Any]:
             },
         )
         namespace_list = [item.strip() for item in namespaces.split(",") if item.strip()]
-        result = runtime.memory_manager.retrieve(query, namespace_list, limit=limit)
+        result = runtime.services.memory_manager.retrieve(query, namespace_list, limit=limit)
         records = result.records
         memory_payload = {
             "stage": "memory_search",
@@ -128,7 +128,7 @@ def build_runtime_tools(runtime: Any, *, bot: Any | None = None) -> list[Any]:
             input_payload={"namespace": namespace, "key": key, "tags": tags},
         )
         tag_list = [item.strip() for item in tags.split(",") if item.strip()]
-        runtime.memory_manager.write(
+        runtime.services.memory_manager.write(
             namespace=namespace,
             key=key,
             content=content,
@@ -177,7 +177,7 @@ def build_runtime_tools(runtime: Any, *, bot: Any | None = None) -> list[Any]:
         try:
             if skill_name not in allowed_skills:
                 raise ValueError(f"Skill `{skill_name}` is not enabled for bot `{bot.id}`.")
-            skill = runtime.skill_registry.get(skill_name)
+            skill = runtime.services.skill_registry.get(skill_name)
             payload = {
                 "name": skill.name,
                 "description": skill.description,
@@ -189,7 +189,7 @@ def build_runtime_tools(runtime: Any, *, bot: Any | None = None) -> list[Any]:
                 "error": str(exc),
                 "available_skills": [
                     skill.name
-                    for skill in runtime.skill_registry.discover()
+                    for skill in runtime.services.skill_registry.discover()
                     if skill.name in allowed_skills
                 ],
             }
@@ -240,7 +240,7 @@ def build_runtime_tools(runtime: Any, *, bot: Any | None = None) -> list[Any]:
         )
         todos = [TodoItem(content=item.content, status=item.status) for item in items]
         try:
-            updated = runtime.todo_state.update(ctx.context.session_id, todos)
+            updated = runtime.services.todo_state.update(ctx.context.session_id, todos)
             payload = {
                 "stage": "todo_update",
                 "items": [item.__dict__ for item in updated],
@@ -275,7 +275,7 @@ def build_runtime_tools(runtime: Any, *, bot: Any | None = None) -> list[Any]:
         load_skill,
         *_build_subagent_agent_tools(runtime, bot=bot),
     ]
-    if runtime.memory_enabled:
+    if runtime.services.memory_enabled:
         tools[1:1] = [memory_search, memory_write]
     if env_bool("AGENTWEAVE_ENABLE_TODO_TOOL", False):
         tools.append(update_todo)
@@ -289,7 +289,7 @@ def _store_runtime_artifact(
     tool_name: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    if run_ctx.result_store is None or run_ctx.result_formatters is None:
+    if run_ctx.artifact_store is None or run_ctx.result_formatters is None:
         return {}
     artifact = run_ctx.result_formatters.format(
         artifact_type,
@@ -300,13 +300,13 @@ def _store_runtime_artifact(
             "source": tool_name,
         },
     )
-    result_id = run_ctx.result_store.create_artifact(
+    result_id = run_ctx.artifact_store.create_artifact(
         run_id=run_ctx.run_id,
         artifact=artifact,
         session_id=run_ctx.session_id,
         bot_id=run_ctx.bot_id,
     )
-    result = run_ctx.result_store.get_metadata(
+    result = run_ctx.artifact_store.get_metadata(
         result_id,
         run_id=run_ctx.run_id,
         session_id=run_ctx.session_id,
@@ -328,15 +328,15 @@ def _store_runtime_artifact(
 def _build_subagent_agent_tools(runtime: Any, *, bot: Any) -> list[Any]:
     tools = []
     allowed = set(bot.subagents)
-    for manifest in runtime.agent_registry.discover():
+    for manifest in runtime.services.agent_registry.discover():
         if manifest.name not in allowed:
             continue
         if manifest.execution.mode != "worker":
             continue
         tools.append(
-            runtime.subagent_runner.build_worker_agent_tool(
+            runtime.services.subagent_runner.build_worker_agent_tool(
                 manifest=manifest,
-                profile=runtime.model_profile,
+                profile=runtime.services.model_profile,
             )
         )
     return tools

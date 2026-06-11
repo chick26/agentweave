@@ -10,7 +10,8 @@ from typing import Any
 import yaml
 
 from agent_runtime.common import file_signature
-from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
+from agent_runtime.registry.agent_registry import AgentRegistry
+from agent_runtime.registry.skill_registry import SkillRegistry
 
 DEFAULT_WELCOME_MESSAGE = "你好，我可以回答已接入能力范围内的问题。"
 DEFAULT_WELCOME_PROMPT = (
@@ -99,7 +100,7 @@ class BotRegistry:
         return BotConfig(
             id="default",
             name="Default Bot",
-            description="默认机器人，兼容当前全部已接入能力。",
+            description="默认机器人，自动聚合当前全部已接入能力。",
             location=self.bots_root / "__generated_default__",
             instructions="",
             subagents=subagents,

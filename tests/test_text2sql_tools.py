@@ -10,10 +10,11 @@ from agents.tool_context import ToolContext
 from agent_runtime.core.context import RuntimeContext
 from agent_runtime.storage.database import DatabaseBackend, SqlDatabaseBackend
 from agent_runtime.core.model_profiles import ModelProfile
-from agent_runtime.storage.result_store import ResultStore
-from agent_runtime.registry.skill_registry import AgentRegistry
+from agent_runtime.storage.artifact_store import ArtifactStore
+from agent_runtime.registry.agent_registry import AgentRegistry
 from agent_runtime.subagent_api import subagent_context
 from subagents.text2sql import extension as tools
+from subagents.text2sql.core import sql_generation
 from subagents.text2sql.core.runtime_state import (
     TEXT2SQL_STATE_NAMESPACE,
     Text2SQLState,
@@ -104,11 +105,11 @@ def test_compact_rows_for_tool_limits_cell_text(monkeypatch):
 
 def test_execute_sql_returns_result_pointer_and_sample(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "SQL_RESULT_SAMPLE_ROWS", 1)
-    store = ResultStore(tmp_path / "agent_results.sqlite")
+    store = ArtifactStore(tmp_path / "agent_artifacts.sqlite")
     run_ctx = RuntimeContext(
         run_id="run-1",
         model_profile=_model_profile(),
-        result_store=store,
+        artifact_store=store,
     )
 
     output = tools._build_execute_output(
@@ -131,7 +132,12 @@ def test_execute_sql_returns_result_pointer_and_sample(tmp_path, monkeypatch):
     assert output["sample_size"] == 1
     assert output["truncated"] is True
     assert "rows" not in output
-    assert store.get_page(output["result_id"], offset=0, limit=10, run_id="run-1") == [
+    assert store.get_artifact_page(
+        output["result_id"],
+        offset=0,
+        limit=10,
+        run_id="run-1",
+    )["rows"] == [
         {"sea_cable_no": "NCP"},
         {"sea_cable_no": "APG"},
     ]
@@ -145,11 +151,11 @@ def test_execute_sql_emits_result_created_ui_event(tmp_path, monkeypatch):
         [("sea_cable_no", "TEXT")],
         [("NCP",), ("APG",)],
     )
-    store = ResultStore(tmp_path / "agent_results.sqlite")
+    store = ArtifactStore(tmp_path / "agent_artifacts.sqlite")
     run_ctx = RuntimeContext(
         run_id="execute-run",
         model_profile=_model_profile(),
-        result_store=store,
+        artifact_store=store,
         agent_registry=_PolicyRegistry(
             policies={
                 "db": {
@@ -259,7 +265,7 @@ def test_execute_sql_emits_failed_tool_lifecycle(tmp_path):
     run_ctx = RuntimeContext(
         run_id="execute-failed-run",
         model_profile=_model_profile(),
-        result_store=ResultStore(tmp_path / "agent_results.sqlite"),
+        artifact_store=ArtifactStore(tmp_path / "agent_artifacts.sqlite"),
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
         active_subagent="text2sql",
     )
@@ -309,11 +315,11 @@ def test_execute_sql_uses_manifest_policy_for_row_limits(tmp_path):
         [("sea_cable_no", "TEXT")],
         [("NCP",), ("APG",), ("SJC",)],
     )
-    store = ResultStore(tmp_path / "agent_results.sqlite")
+    store = ArtifactStore(tmp_path / "agent_artifacts.sqlite")
     run_ctx = RuntimeContext(
         run_id="execute-truncated-run",
         model_profile=_model_profile(),
-        result_store=store,
+        artifact_store=store,
         agent_registry=_PolicyRegistry(
             policies={
                 "db": {
@@ -366,18 +372,19 @@ def test_execute_sql_uses_manifest_policy_for_row_limits(tmp_path):
         payload["result_id"],
         run_id="execute-truncated-run",
     )["metrics"]["count_is_exact"] is False
-    assert store.get_page(
+    assert store.get_artifact_page(
         payload["result_id"],
         offset=0,
         limit=10,
         run_id="execute-truncated-run",
-    ) == [
+    )["rows"] == [
         {"sea_cable_no": "NCP"},
         {"sea_cable_no": "APG"},
     ]
 
 
 def test_explicit_schema_value_and_sql_generation_steps(tmp_path, monkeypatch):
+    monkeypatch.delenv("TEXT2SQL_SQL_MODEL", raising=False)
     backend = _sqlite_backend(
         tmp_path,
         "resources",
@@ -391,8 +398,10 @@ def test_explicit_schema_value_and_sql_generation_steps(tmp_path, monkeypatch):
         active_subagent="text2sql",
     )
     _install_text2sql_backend(run_ctx, backend)
+    model_calls = []
 
     async def fake_call_model(self, **kwargs):
+        model_calls.append(kwargs)
         return (
             "SELECT COUNT(*) AS count FROM resources "
             "WHERE machine_room = '403' AND cabinet_business_status = 'Available'"
@@ -487,6 +496,7 @@ def test_explicit_schema_value_and_sql_generation_steps(tmp_path, monkeypatch):
     }
     assert payload["sql"].startswith("SELECT COUNT(*)")
     assert payload["validation_error"] == ""
+    assert model_calls[0]["model_name"] == "qwen3-32b"
     assert {"activation", "schema", "search_values", "sql_extract"} <= set(stages)
     tool_events = [
         event for event in run_ctx.events
@@ -498,3 +508,9 @@ def test_explicit_schema_value_and_sql_generation_steps(tmp_path, monkeypatch):
         "tool_result",
         "tool_call_end",
     ]
+
+
+def test_text2sql_sql_generation_model_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("TEXT2SQL_SQL_MODEL", "qwen3-32b-fast")
+
+    assert sql_generation.sql_generation_model_name() == "qwen3-32b-fast"

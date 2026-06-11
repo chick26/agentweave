@@ -15,7 +15,7 @@ sequenceDiagram
     participant Runner as SubagentRunner
     participant Worker as Text2SQL Subagent
     participant DB as SQLite / DB Backend
-    participant Store as Result Store
+    participant Store as ArtifactStore
 
     User->>Orchestrator: 提出结构化数据或专业任务请求
     Note over Orchestrator: AgentRegistry 扫描 subagents/*/AGENT.yaml + prompt.md<br/>SkillRegistry 扫描 skills/*/SKILL.md<br/>BotRegistry 扫描 bots/*/BOT.yaml
@@ -33,7 +33,7 @@ sequenceDiagram
     Worker->>Worker: generate_readonly_sql() 生成只读 SQL
     Worker->>DB: execute_sql(domain, sql) 执行只读 SQL 语句
     DB-->>Worker: 返回原始数据结果
-    Worker->>Store: 将上限内结果写入本地 SQLite (.agentweave/agent_results.sqlite)
+    Worker->>Store: 将上限内 artifact 写入本地 SQLite (.agentweave/agent_artifacts.sqlite)
     Store-->>Worker: 返回对应的唯一 result_id
     Worker-->>Runner: 返回规范 JSON (含 answer, artifacts)
     deactivate Worker
@@ -65,8 +65,8 @@ sequenceDiagram
    * **异常重试**：如 SQL 执行报错，Worker 会结合报错信息重新生成并执行最多一次。
 
 4. **结果持久化与展现阶段（Result Persistence & UI）**：
-   * 数据库只读执行后，`execute_sql` 将上限内的查询结果写入本地 `.agentweave/agent_results.sqlite` 的 Result Store。
-   * Worker 通过标准 ResultStore artifact envelope 暴露 `result_id`、`preview`、`metrics` 和 `metadata`，防止主模型上下文溢出。
+   * 数据库只读执行后，`execute_sql` 将上限内的查询结果写入本地 `.agentweave/agent_artifacts.sqlite` 的 ArtifactStore。
+   * Worker 通过标准 artifact envelope 暴露 `result_id`、`preview`、`metrics` 和 `metadata`，防止主模型上下文溢出。
    * Orchestrator 提取关键结论，以简洁的中文呈现给用户；前端 Streamlit 接收 `result_id`，在 "Results" 页签下进行分页数据展示及提供 CSV 导出下载。
 
 ## 运行时机制与扩展
@@ -127,7 +127,7 @@ agentweave/
 │   │   ├── context.py             # RuntimeContext
 │   │   ├── events.py              # RuntimeEvent / EventBus
 │   │   ├── hooks.py               # HookResult/HookRunner 等核心 hook 机制
-│   │   ├── result_events.py       # 从事件流提取 ResultStore metadata
+│   │   ├── result_events.py       # 从事件流提取 ArtifactStore metadata
 │   │   ├── compressor.py          # 上下文压缩与 hard trim
 │   │   ├── model_profiles.py      # 单 chat 模型配置
 │   │   └── runtime_utils.py       # 模型日志、SQL 提取、时间工具
@@ -172,7 +172,7 @@ agentweave/
 新增通用 subagent：
 
 1. 在 `subagents/` 下创建新目录，例如 `subagents/my_agent/`。
-2. 创建 `AGENT.yaml`，声明 `name`、`description`、`execution.mode: worker`、`extension`、`capabilities`、`policies`、`output_contract`、`memory` 和 `routing_hints`。worker 和 extension 中的 chat 调用统一使用 runtime 的 `CHAT_*` 模型配置。
+2. 创建 `AGENT.yaml`，声明 `name`、`description`、`execution.mode: worker`、`extension`、`capabilities`、`policies`、`output_contract`、`memory` 和 `routing_hints`。worker 和 extension 中的 chat 调用默认复用 runtime 的 `CHAT_*` client profile；特定 subagent 可只覆盖模型名。
 3. 创建 `prompt.md`，作为 worker prompt 模板。
 4. 在 subagent 目录中实现 `extension.py`，暴露 `register(api)`；通过 `api.tool(...)`、`api.result_formatter(...)`、`api.capability_resolver(...)`、`api.validate_environment(...)`、`api.prompt_context(...)` 注册能力。
 5. 新 subagent 必须统一在 `extension.py register(api)` 中注册工具；`AGENT.yaml tools` legacy 入口已删除。
@@ -234,7 +234,8 @@ routing_hints:
 | `routing_hints` | 推荐 | 给 Orchestrator 的路由提示词。用户问题命中这些意图时，更容易委派到该 subagent。 |
 | `suggested_questions` | 否 | subagent 自己声明的欢迎页预设问题。 |
 
-注意：模型角色字段已移除；worker chat 调用统一使用 runtime 的 `CHAT_*` 模型配置。
+注意：模型角色字段已移除；worker chat 调用默认复用 runtime 的 `CHAT_*`
+client profile。Text2SQL 的 SQL 生成只通过 `TEXT2SQL_SQL_MODEL` 覆盖模型名。
 ResultFormatter 映射由 subagent 自己的 extension 注册；core 只提供统一 artifact 协议和 registry。
 
 ## 新增 Skill
@@ -344,12 +345,12 @@ uv run agentweave-prepare-text2sql --csv-root /absolute/or/project/path --overwr
 - `text2sql.sqlite`：本地 Text2SQL SQLite 数据库。
 - `rag_index.json`：本地 RAG Markdown 索引。
 - `agent_memory.sqlite`：长期记忆与向量索引。
-- `agent_results.sqlite`：大结果 Result Store。
+- `agent_artifacts.sqlite`：大结果 ArtifactStore。
 - `streamlit_sessions.sqlite` / `server_sessions.sqlite`：会话与诊断日志。
 
 ## 查询结果存储
 
-`execute_sql()` 不再把完整查询结果塞进 worker 上下文，而是写入本地 SQLite `.agentweave/agent_results.sqlite`。ResultStore 对外返回标准 artifact envelope：
+`execute_sql()` 不再把完整查询结果塞进 worker 上下文，而是写入本地 SQLite `.agentweave/agent_artifacts.sqlite`。ArtifactStore 对外返回标准 artifact envelope：
 
 - `result_id`
 - `artifact_type` / `title` / `source`
@@ -357,15 +358,15 @@ uv run agentweave-prepare-text2sql --csv-root /absolute/or/project/path --overwr
 - `metrics.row_count` / `metrics.stored_count` / `metrics.count_is_exact` / `metrics.truncated`
 - `metadata`，例如 SQL artifact 的 `domain` 和 `sql`
 
-Streamlit 的 `Results` 页签会根据 `result_id` 从 Result Store 分页读取已存储结果，并提供 CSV 下载。
+Streamlit 的 `Results` 页签会根据 `result_id` 从 ArtifactStore 分页读取已存储结果，并提供 CSV 下载。
 
 可调环境变量：
 
 ```bash
 export SQL_RESULT_SAMPLE_ROWS=50       # 返回给模型的样例行数
-export SQL_RESULT_STORE_MAX_ROWS=1000  # 单次查询最多写入 Result Store 的行数
+export SQL_RESULT_STORE_MAX_ROWS=1000  # 单次查询最多写入 ArtifactStore 的行数
 export SQL_RESULT_CELL_MAX_CHARS=300   # 样例中单元格文本预览长度
-export SQL_RESULT_TTL_HOURS=24         # 可选：写入新结果时清理超过 TTL 的历史结果
+export ARTIFACT_TTL_HOURS=24           # 可选：写入新 artifact 时清理超过 TTL 的历史 artifact
 ```
 
 ## 诊断日志
@@ -394,6 +395,7 @@ sqlite3 .agentweave/streamlit_sessions.sqlite \
 | 角色 | 环境变量 | 默认值 |
 |------|----------|--------|
 | Chat 模型 | `CHAT_BASE_URL` / `CHAT_MODEL` | `http://localhost:8000/v1` / `qwen3.6-27b` |
+| Text2SQL SQL 生成模型 | `TEXT2SQL_SQL_MODEL` | `qwen3-32b`，复用 `CHAT_BASE_URL` / `CHAT_API_KEY` |
 | Chat context window | `CHAT_CONTEXT_WINDOW` | `32768` |
 | Memory embedding | `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` | `http://localhost:8002/v1` / `openai-compatible-embedding-model` |
 

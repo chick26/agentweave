@@ -9,7 +9,7 @@
 前一轮 pi-agent 风格分层已经把 `core/memory/storage/registry/ui` 边界拆开，但 Streamlit 仍然承担了事实上的应用入口职责：
 
 - 初始化 `AgentRuntime`。
-- 管理 session id、chat messages、diagnostics、ResultStore 预览。
+- 管理 session id、chat messages、diagnostics、ArtifactStore 预览。
 - 直接消费 runtime events。
 - 承担本地调试 UI、导出、模板、资源 reload 等产品功能。
 
@@ -17,11 +17,11 @@
 
 ## 设计目标
 
-- 后端提供统一能力：session、run、SSE events、ResultStore、diagnostics、resource reload。
+- 后端提供统一能力：session、run、SSE events、ArtifactStore、diagnostics、resource reload。
 - TS Web 项目独立维护，不 import Python 代码。
 - Streamlit 退回本地调试台，不再是唯一运行入口。
 - TUI 后续保留在本仓库，但优先复用同一 HTTP/SSE 协议。
-- 大结果继续通过 ResultStore 分页读取，不塞进模型上下文或 SSE 大包。
+- 大结果继续通过 ArtifactStore 分页读取，不塞进模型上下文或 SSE 大包。
 - 后端只负责事件结构化，不替前端做展示策略判断。
 
 ## 第一版接口形态
@@ -79,7 +79,7 @@ SSE 事件保留统一 envelope：
 当前主要事件：
 
 - `runtime_event`：透传 runtime events，前端可按 `payload.kind` / `payload.payload.stage` 展示。
-- `result_created`：提炼 ResultStore 指针，方便前端展示 result chip。
+- `result_created`：提炼 ArtifactStore 指针，方便前端展示 result chip。
 - `model_delta`：模型增量输出，payload 带 `kind/stage/title/model/delta`。
 - `run_complete`：最终答案和 result ids 的权威状态。
 - `run_error`：失败状态和诊断入口。
@@ -137,7 +137,7 @@ TS Web 可以按如下方式消费：
 - Trace 区：
   - 消费 `runtime_event`、`result_created`、必要的 `model_delta`。
 - Results：
-  - 点击 `result_id` 后通过 ResultStore API 分页读取。
+  - 点击 `result_id` 后通过 ArtifactStore API 分页读取。
 - Diagnostics：
   - 通过 `/diagnostics/{run_id}` 读取 model calls 和事件时间线。
 
@@ -152,7 +152,7 @@ TS Web 可以按如下方式消费：
 - session 创建与 run 创建。
 - SSE 输出 `runtime_event`、`result_created`、`model_delta`、`run_complete`。
 - `after_sequence` 恢复包含 `model_delta` 的事件流。
-- ResultStore 分页和 CSV 导出。
+- ArtifactStore 分页和 CSV 导出。
 - diagnostics 持久化读取。
 - run cache 最大数量与 TTL 淘汰。
 - 文档契约包含 endpoint、事件类型和 TypeScript interface。

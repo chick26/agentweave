@@ -4,7 +4,8 @@ from pathlib import Path
 
 from agent_runtime.worker.subagent_runner import SubagentRunner
 from agent_runtime.registry.resources import ResourceLoader
-from agent_runtime.registry.skill_registry import AgentRegistry, SkillRegistry
+from agent_runtime.registry.agent_registry import AgentRegistry
+from agent_runtime.registry.skill_registry import SkillRegistry
 
 
 def _write(path: Path, text: str) -> None:

@@ -46,6 +46,13 @@ TEXT2SQL_BACKEND=sqlite
 TEXT2SQL_DATABASE_URL=sqlite:////absolute/path/to/readonly.sqlite
 ```
 
+SQL generation uses the same `CHAT_BASE_URL` and `CHAT_API_KEY` as the main
+runtime, but the model name is Text2SQL-specific:
+
+```dotenv
+TEXT2SQL_SQL_MODEL=qwen3-32b
+```
+
 Production should point `TEXT2SQL_DATABASE_URL` at a read-only database. The
 runtime never loads CSV files automatically and never builds a database during a
 subagent run.

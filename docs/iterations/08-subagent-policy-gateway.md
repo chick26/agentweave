@@ -19,19 +19,19 @@ capability -> tool -> policy -> audit -> artifact access
 - Text2SQL `execute_sql` 统一从 `policies.db` 读取 `max_rows`、`sample_rows`、`timeout_seconds` 和 `require_schema_validation`。
 - SQLite backend 新增 per-query timeout，超时会以标准工具错误返回。
 - `BotRegistry` 新增生产环境默认授权保护：`AGENTWEAVE_ENV=production` 时默认不再自动生成 default-all bot，除非设置 `AGENTWEAVE_ALLOW_GENERATED_DEFAULT_BOT=1`。
-- ResultStore artifact 写入时记录 `run_id`、`session_id` 和 `bot_id`，读取分页和 CSV 导出支持按 scope 校验。
+- ArtifactStore artifact 写入时记录 `run_id`、`session_id` 和 `bot_id`，读取分页和 CSV 导出支持按 scope 校验。
 
 ## 取舍
 
 - 本轮不做 chain / parallel / background / resume，也不恢复 per-subagent model override。
 - Policy Gateway 先提供通用注册、校验和审计，不把 SQL/RAG 业务规则写进 runner。
-- ResultStore 先绑定 `run_id/session_id/bot_id`；当前项目还没有 user/tenant 身份模型，后续接入后再扩展 scope。
-- ResultStore 读取分页、metadata、CSV 和 raw rows 时必须提供 `run_id`、`session_id` 或 `bot_id` 至少一种 scope，裸 `result_id` 读取会被拒绝。
+- ArtifactStore 先绑定 `run_id/session_id/bot_id`；当前项目还没有 user/tenant 身份模型，后续接入后再扩展 scope。
+- ArtifactStore 读取分页、metadata、CSV 和 raw rows 时必须提供 `run_id`、`session_id` 或 `bot_id` 至少一种 scope，裸 `result_id` 读取会被拒绝。
 
 ## 已验证
 
 ```bash
-PYTHONPATH=. uv run pytest tests/test_subagent_runner.py tests/test_text2sql_tools.py tests/test_db_backend.py tests/test_bot_registry.py tests/test_result_store.py tests/test_server_service.py tests/test_subagent_boundaries.py tests/test_public_imports.py
+PYTHONPATH=. uv run pytest tests/test_subagent_runner.py tests/test_text2sql_tools.py tests/test_db_backend.py tests/test_bot_registry.py tests/test_artifact_store.py tests/test_server_service.py tests/test_subagent_boundaries.py tests/test_public_imports.py
 ```
 
 结果：81 passed。
@@ -39,5 +39,5 @@ PYTHONPATH=. uv run pytest tests/test_subagent_runner.py tests/test_text2sql_too
 ## 后续关注
 
 - 第 9 轮可继续推进 chain / parallel 编排，并复用本轮的 capability/policy audit metadata。
-- ResultStore 后续接入真实用户体系时，需要把 scope 扩展到 `user_id` / `tenant_id`。
+- ArtifactStore 后续接入真实用户体系时，需要把 scope 扩展到 `user_id` / `tenant_id`。
 - 外部数据库或内部系统 gateway 接入时，应优先复用 `api.tool(..., capability, policy_path)` 约束，不让 extension 各自散写安全逻辑。

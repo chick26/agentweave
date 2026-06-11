@@ -10,8 +10,8 @@ from agents.tool_context import ToolContext
 
 from agent_runtime.core.context import RuntimeContext
 from agent_runtime.core.model_profiles import ModelProfile
-from agent_runtime.registry.skill_registry import AgentRegistry
-from agent_runtime.storage.result_store import ResultStore
+from agent_runtime.registry.agent_registry import AgentRegistry
+from agent_runtime.storage.artifact_store import ArtifactStore
 from subagents.rag import extension as rag_tools
 from subagents.rag.core.markdown_loader import KnowledgeDocument
 from agentweave_prepare import rag as prepare_index
@@ -309,14 +309,14 @@ def test_rag_tool_searches_prepared_index(tmp_path, monkeypatch):
         "agent_runtime.subagent_api.SubagentContext.embedding_client",
         lambda self: FakeEmbeddingClient(),
     )
-    result_store = ResultStore(tmp_path / "agent_results.sqlite")
+    artifact_store = ArtifactStore(tmp_path / "agent_artifacts.sqlite")
     run_ctx = RuntimeContext(
         run_id="rag-index-run",
         runtime_root=tmp_path,
         active_subagent="rag",
         model_profile=_model_profile(),
         agent_registry=AgentRegistry(subagents_root=Path("subagents")),
-        result_store=result_store,
+        artifact_store=artifact_store,
     )
 
     output = asyncio.run(
@@ -336,15 +336,15 @@ def test_rag_tool_searches_prepared_index(tmp_path, monkeypatch):
     assert payload["result_id"].startswith("res_")
     assert payload["chunks"][0]["chunk_id"] == "knowledge.md#p1:c0"
     assert payload["chunks"][0]["match_method"] == "prepared_index"
-    metadata = result_store.get_metadata(payload["result_id"], run_id="rag-index-run")
+    metadata = artifact_store.get_metadata(payload["result_id"], run_id="rag-index-run")
     assert metadata["artifact_type"] == "rag_chunks"
     assert metadata["metadata"]["query"] == "target"
-    assert result_store.get_page(
+    assert artifact_store.get_artifact_page(
         payload["result_id"],
         offset=0,
         limit=10,
         run_id="rag-index-run",
-    )[0]["chunk_id"] == "knowledge.md#p1:c0"
+    )["rows"][0]["chunk_id"] == "knowledge.md#p1:c0"
 
 
 def test_rag_summary_tool_returns_prepared_index_summary(tmp_path, monkeypatch):

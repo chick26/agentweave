@@ -1,4 +1,4 @@
-"""Result-store browsing components for Streamlit."""
+"""ArtifactStore browsing components for Streamlit."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def render_result_runs(
     format_run_option: Callable[[dict[str, Any]], str],
 ) -> None:
     if not runs:
-        st.info("还没有查询结果。发起一次问数后，这里会显示 Result Store 中的分页预览和 CSV 下载。")
+        st.info("还没有查询结果。发起一次问数后，这里会显示 ArtifactStore 中的分页预览和 CSV 下载。")
         return
 
     newest_first = list(reversed(runs))
@@ -43,7 +43,7 @@ def render_result_runs(
     selected_run = newest_first[selected_idx]
     results = extract_result_metadata(selected_run.get("events", []))
     if not results:
-        st.warning("这次对话没有可预览的 Result Store 结果。")
+        st.warning("这次对话没有可预览的 ArtifactStore 结果。")
         return
 
     selected_result_id = st.selectbox(
@@ -71,9 +71,9 @@ def render_result_runs(
         "bot_id": str(selected_event_metadata.get("bot_id") or selected_run.get("bot_id") or ""),
     }
     try:
-        metadata = runtime.result_store.get_metadata(selected_result_id, **scope)
+        metadata = runtime.services.artifact_store.get_metadata(selected_result_id, **scope)
     except KeyError:
-        st.error("Result Store 无法读取这个 result_id，可能是结果已清理、运行配置已切换，或事件缺少访问 scope。")
+        st.error("ArtifactStore 无法读取这个 result_id，可能是结果已清理、运行配置已切换，或事件缺少访问 scope。")
         st.json(next(item for item in results if item["result_id"] == selected_result_id))
         return
 
@@ -123,7 +123,7 @@ def render_result_runs(
             key=f"result_page_{selected_result_id}",
         )
         offset = (int(page) - 1) * int(page_size)
-        page_payload = runtime.result_store.get_artifact_page(
+        page_payload = runtime.services.artifact_store.get_artifact_page(
             selected_result_id,
             offset=offset,
             limit=int(page_size),
@@ -136,7 +136,7 @@ def render_result_runs(
 
     st.download_button(
         "下载已存储 CSV",
-        data=runtime.result_store.export_csv(selected_result_id, **scope),
+        data=runtime.services.artifact_store.export_csv(selected_result_id, **scope),
         file_name=f"{selected_result_id}.csv",
         mime="text/csv",
         use_container_width=True,

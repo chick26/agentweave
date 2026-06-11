@@ -8,7 +8,7 @@ from agent_runtime.memory.embeddings import EmbeddingProfile
 from agent_runtime.memory.memory_manager import MemoryManager
 from agent_runtime.memory.memory_store import MemoryStore
 from agent_runtime.memory.todo_state import TodoItem, TodoState
-from agent_runtime.registry.skill_registry import AgentRegistry
+from agent_runtime.registry.agent_registry import AgentRegistry
 
 
 class FakeEmbeddingClient:

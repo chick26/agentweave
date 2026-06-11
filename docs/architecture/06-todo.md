@@ -42,7 +42,7 @@ async def update_todo(ctx, items: list[TodoToolItem]) -> str:
     todos = [TodoItem(content=item.content, status=item.status) for item in items]
     
     # 内部会进行 in_progress 数量校验，并发出 todo_event
-    updated = runtime.memory_manager.update_todo(ctx.context.session_id, todos)
+    updated = runtime.services.todo_state.update(ctx.context.session_id, todos)
     
     return f"Updated {len(updated)} todo items."
 ```

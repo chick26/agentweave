@@ -195,10 +195,6 @@ class CsvSQLiteBackend:
         return _format_schema_for_prompt(table, self.get_column_info(table), field_descriptions)
 
 
-class SQLiteBackend(CsvSQLiteBackend):
-    """Backward-compatible alias for the CSV-backed SQLite demo backend."""
-
-
 class SqlDatabaseBackend:
     """Read-only SQL backend for real database tables.
 

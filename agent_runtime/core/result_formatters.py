@@ -10,7 +10,7 @@ from agent_runtime.common import columns_from_rows
 
 @dataclass(frozen=True)
 class ResultArtifactSpec:
-    """Normalized artifact payload ready for ResultStore persistence."""
+    """Normalized artifact payload ready for ArtifactStore persistence."""
 
     artifact_type: str
     title: str = ""
@@ -18,6 +18,7 @@ class ResultArtifactSpec:
     rows: list[dict[str, Any]] = field(default_factory=list)
     columns: list[str] = field(default_factory=list)
     preview_rows: list[dict[str, Any]] = field(default_factory=list)
+    preview: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     row_count: int | None = None
     row_count_is_exact: bool = True
@@ -27,6 +28,14 @@ class ResultArtifactSpec:
         preview_rows = _dict_rows(self.preview_rows) if self.preview_rows else rows[:5]
         columns = list(self.columns or columns_from_rows(rows or preview_rows))
         row_count = int(self.row_count) if self.row_count is not None else len(rows)
+        preview = _preview_envelope(
+            self.preview,
+            default={
+                "kind": "rows",
+                "columns": columns,
+                "rows": preview_rows,
+            },
+        )
         return ResultArtifactSpec(
             artifact_type=str(self.artifact_type or "generic_artifact"),
             title=str(self.title or self.artifact_type or "Result Artifact"),
@@ -34,6 +43,7 @@ class ResultArtifactSpec:
             rows=rows,
             columns=columns,
             preview_rows=preview_rows,
+            preview=preview,
             metadata=dict(self.metadata or {}),
             row_count=max(0, row_count),
             row_count_is_exact=bool(self.row_count_is_exact),
@@ -57,11 +67,7 @@ class ResultArtifactSpec:
             "artifact_type": normalized.artifact_type,
             "title": normalized.title,
             "source": normalized.source,
-            "preview": {
-                "kind": "rows",
-                "columns": normalized.columns,
-                "rows": normalized.preview_rows,
-            },
+            "preview": normalized.preview,
             "metrics": {
                 "row_count": normalized.row_count,
                 "stored_count": max(0, stored_count),
@@ -124,6 +130,7 @@ class GenericArtifactFormatter:
             source=str(payload.get("source") or payload.get("tool_name") or ""),
             rows=rows,
             preview_rows=preview_rows,
+            preview=payload.get("preview") if isinstance(payload.get("preview"), dict) else {},
             columns=payload.get("columns") if isinstance(payload.get("columns"), list) else [],
             metadata={**metadata},
             row_count=_optional_int(payload.get("row_count")),
@@ -177,6 +184,15 @@ def _dict_rows(value: Any) -> list[dict[str, Any]]:
         else:
             rows.append({"value": item})
     return rows
+
+
+def _preview_envelope(value: Any, *, default: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, dict) or not value:
+        return dict(default)
+    preview = dict(value)
+    if not str(preview.get("kind") or "").strip():
+        preview["kind"] = default["kind"]
+    return preview
 
 
 def _optional_int(value: Any) -> int | None:

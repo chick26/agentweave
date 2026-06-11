@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.registry.skill_registry import AgentRegistry
+from agent_runtime.registry.agent_registry import AgentRegistry
 from subagents.text2sql.core.domain_catalog import Text2SQLDomainCatalog
 from subagents.text2sql.core.sql_safety import validate_sql_uses_selected_schema
 

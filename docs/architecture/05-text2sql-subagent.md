@@ -2,7 +2,11 @@
 
 ## 概述
 
-Text2SQL 是一个普通 worker subagent。它继承主框架的运行能力：模型配置、Tool 注册、RunContext、事件输出、ResultStore 和 session 隔离；它自己只定义 SQL 查询需要的 prompt、工具、表目录和纯业务逻辑。
+Text2SQL 是一个普通 worker subagent。它继承主框架的运行能力：模型配置、Tool 注册、RunContext、事件输出、ArtifactStore 和 session 隔离；它自己只定义 SQL 查询需要的 prompt、工具、表目录和纯业务逻辑。
+
+`generate_readonly_sql` 的 SQL 生成模型默认使用 `TEXT2SQL_SQL_MODEL=qwen3-32b`。
+该设置只覆盖模型名，base URL 和 API key 仍复用 runtime 的 `CHAT_BASE_URL` /
+`CHAT_API_KEY`。
 
 主框架不理解 SQL、schema、业务口径或 value linking。框架只把 `text2sql` 当作一个可委派的 worker tool，并提供 run-scoped typed state 容器；Text2SQL 自己定义这块状态里的 domain/table/schema 含义。
 
@@ -17,7 +21,7 @@ sequenceDiagram
     Worker->>DB: search_domain_values(domain_name, query)
     Worker->>Worker: generate_readonly_sql(question, domain_name, linked_values)
     Worker->>DB: execute_sql(domain_name, sql)
-    Worker->>ResultStore: 保存上限内结果
+    Worker->>ArtifactStore: 保存上限内结果
     Worker-->>Orchestrator: answer + result_id + sample_rows
 ```
 
